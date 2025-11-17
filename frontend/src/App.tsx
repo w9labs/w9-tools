@@ -116,22 +116,39 @@ function AdminPanel() {
     const fetchItems = async () => {
       try {
         const resp = await fetch(joinUrl(API_BASE, '/admin/items'), { credentials: 'include' })
+        console.log('admin/items response status:', resp.status)
+        console.log('admin/items response headers:', resp.headers.get('content-type'))
+        
         if (resp.status === 401) {
+          console.log('Not authenticated, redirecting to login')
           window.location.href = '/admin/login'
           return
         }
+        
         const text = await resp.text()
+        console.log('admin/items response text:', text.substring(0, 200))
+        
         if (!resp.ok) {
           throw new Error(`HTTP ${resp.status}: ${text}`)
         }
-        if (!text) {
+        
+        if (!text || text.trim() === '') {
+          console.log('Empty response, setting empty items')
           setItems([])
           setLoading(false)
           return
         }
-        const data = JSON.parse(text)
-        setItems(Array.isArray(data) ? data : [])
+        
+        try {
+          const data = JSON.parse(text)
+          console.log('Parsed items:', data)
+          setItems(Array.isArray(data) ? data : [])
+        } catch (parseErr) {
+          console.error('JSON parse error:', parseErr, 'text was:', text.substring(0, 500))
+          throw new Error(`JSON parse error: ${parseErr}`)
+        }
       } catch (err: any) {
+        console.error('admin/items error:', err)
         setError(err?.message || 'Failed to load items')
       } finally {
         setLoading(false)
