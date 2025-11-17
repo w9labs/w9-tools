@@ -50,7 +50,7 @@ BUILD_USER="${SUDO_USER:-$(whoami)}"
 # Install packages (only if needed)
 echo "Checking packages..."
 sudo apt-get update -qq >/dev/null 2>&1 || true
-sudo apt-get install -y build-essential pkg-config libsqlite3-dev nodejs npm nginx ufw openssl >/dev/null 2>&1 || true
+sudo apt-get install -y build-essential pkg-config libsqlite3-dev sqlite3 nodejs npm nginx ufw openssl >/dev/null 2>&1 || true
 echo "✓ Packages ready"
 
 # Create service user
