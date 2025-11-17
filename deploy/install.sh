@@ -106,7 +106,9 @@ server {
 
     location /health { proxy_pass http://127.0.0.1:$APP_PORT; }
     location /api/ { proxy_pass http://127.0.0.1:$APP_PORT; proxy_set_header Host \$host; }
-    location /admin/ { proxy_pass http://127.0.0.1:$APP_PORT; proxy_set_header Host \$host; }
+    location = /admin/login { proxy_pass http://127.0.0.1:$APP_PORT; proxy_set_header Host \$host; }
+    location = /admin/logout { proxy_pass http://127.0.0.1:$APP_PORT; proxy_set_header Host \$host; }
+    location /admin/items { proxy_pass http://127.0.0.1:$APP_PORT; proxy_set_header Host \$host; }
     location /r/ { proxy_pass http://127.0.0.1:$APP_PORT; proxy_set_header Host \$host; }
     location /s/ { proxy_pass http://127.0.0.1:$APP_PORT; proxy_set_header Host \$host; }
     location /files/ { proxy_pass http://127.0.0.1:$APP_PORT; proxy_set_header Host \$host; }
