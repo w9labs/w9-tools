@@ -1,4 +1,4 @@
-import { useState, useRef, FormEvent } from 'react'
+import { useState, useRef, FormEvent, useEffect } from 'react'
 
 const API_BASE: string = import.meta.env?.VITE_API_BASE_URL || ''
 
@@ -23,16 +23,65 @@ function useRoute() {
 }
 
 function AdminPanel() {
+  const [items, setItems] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const fetchItems = async () => {
+      try {
+        const resp = await fetch(joinUrl(API_BASE, '/admin/items'), { credentials: 'include' })
+        if (resp.status === 401) {
+          window.location.href = '/admin/login'
+          return
+        }
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        const data = await resp.json()
+        setItems(data)
+      } catch (err: any) {
+        setError(err?.message || 'Failed to load items')
+      } finally {
+        setLoading(false)
+      }
+    }
+    fetchItems()
+  }, [])
+
   return (
     <div className="app">
       <main className="container">
         <h1>Admin Panel</h1>
-        <p>Database management interface</p>
-        <iframe
-          src="/admin/"
-          style={{ width: '100%', height: '80vh', border: 'none' }}
-          title="Admin Panel"
-        />
+        <button onClick={() => {
+          fetch(joinUrl(API_BASE, '/admin/logout'), { method: 'POST', credentials: 'include' })
+          window.location.href = '/'
+        }} className="button">Logout</button>
+        {loading && <p>Loading items...</p>}
+        {error && <p style={{ color: 'red' }}>{error}</p>}
+        <table style={{ width: '100%', marginTop: '20px', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={{ border: '1px solid #ddd', padding: '8px' }}>Code</th>
+              <th style={{ border: '1px solid #ddd', padding: '8px' }}>Type</th>
+              <th style={{ border: '1px solid #ddd', padding: '8px' }}>Value</th>
+              <th style={{ border: '1px solid #ddd', padding: '8px' }}>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item: any) => (
+              <tr key={item.code}>
+                <td style={{ border: '1px solid #ddd', padding: '8px' }}>{item.code}</td>
+                <td style={{ border: '1px solid #ddd', padding: '8px' }}>{item.kind}</td>
+                <td style={{ border: '1px solid #ddd', padding: '8px', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.value}</td>
+                <td style={{ border: '1px solid #ddd', padding: '8px' }}>
+                  <button onClick={() => {
+                    fetch(joinUrl(API_BASE, `/admin/items/${item.code}/delete`), { method: 'POST', credentials: 'include' })
+                    setItems(items.filter((i: any) => i.code !== item.code))
+                  }} className="button" style={{ fontSize: '12px' }}>Delete</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </main>
     </div>
   )
