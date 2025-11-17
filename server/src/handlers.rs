@@ -131,9 +131,10 @@ fn try_generate_preview(original_path: &StdPath, preview_path: &StdPath) -> Resu
             
             // Try to write at very low quality
             let mut buf = Vec::new();
+            let mut cur = std::io::Cursor::new(&mut buf);
             for quality in [45u8, 35, 25, 15] {
                 buf.clear();
-                let mut cur = std::io::Cursor::new(&mut buf);
+                cur = std::io::Cursor::new(&mut buf);
                 if fallback_img.write_to(&mut cur, ImageOutputFormat::Jpeg(quality)).is_ok() {
                     if buf.len() <= PREVIEW_MAX_BYTES {
                         tracing::warn!("Fallback succeeded at quality={}, size={}KB", quality, buf.len() / 1024);
