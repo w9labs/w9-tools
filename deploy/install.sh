@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Idempotent installer for w9. It will:
+# Idempotent installer for w9 (Cloudflare-proxied setup)
 # - Install required packages (Debian/Ubuntu)
 # - Create system user and runtime dirs
-# - Ensure Rust toolchain for the repo owner
+# - Ensure Rust toolchain
 # - Build release binary
-# - Install to /opt/w9/w9
-# - Write systemd unit and enable service
-# - Optionally configure nginx and Cloudflare Origin certs
+# - Install to /opt/w9
+# - Setup systemd service
+# - Configure nginx HTTP reverse proxy (Cloudflare handles HTTPS)
 # Usage: sudo ./deploy/install.sh
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 echo "Repo root: $ROOT_DIR"
 
-# Configuration (override via environment variables)
+# Configuration
 SERVICE_NAME=${SERVICE_NAME:-w9}
 BIN_NAME=${BIN_NAME:-w9}
 INSTALL_DIR=${INSTALL_DIR:-/opt/w9}
@@ -24,35 +24,15 @@ DATA_DIR=${DATA_DIR:-$INSTALL_DIR/data}
 UPLOADS_DIR=${UPLOADS_DIR:-$INSTALL_DIR/uploads}
 ENV_FILE=${ENV_FILE:-/etc/default/$SERVICE_NAME}
 SYSTEMD_UNIT=${SYSTEMD_UNIT:-/etc/systemd/system/$SERVICE_NAME.service}
-CF_SSL_DIR=${CF_SSL_DIR:-/etc/ssl/cf_origin}
-NGINX_SERVER_NAME=${NGINX_SERVER_NAME:-w9.se}
 NGINX_SITE_PATH=${NGINX_SITE_PATH:-/etc/nginx/sites-available/$SERVICE_NAME}
 APP_PORT=${APP_PORT:-10105}
-ENV_OVERWRITE=${ENV_OVERWRITE:-1}
+DOMAIN=${DOMAIN:-w9.se}
+BASE_URL=${BASE_URL:-https://$DOMAIN}
 
-# API/TLS settings
-API_DOMAIN=${API_DOMAIN:-$NGINX_SERVER_NAME}
-# The public domain for short links (can differ from API_DOMAIN if behind reverse proxy)
-BASE_URL=${BASE_URL:-https://$API_DOMAIN}
-# Ensure BASE_URL has a protocol
-if [[ ! "$BASE_URL" =~ ^https?:// ]]; then
-  BASE_URL="https://$BASE_URL"
-fi
-# Whether the API DNS is proxied behind Cloudflare (orange cloud)
-# If enabled and CERTBOT is enabled, we will use DNS-01 with Cloudflare.
-PROXIED_API=${PROXIED_API:-1}
-CERTBOT_ENABLE=${CERTBOT_ENABLE:-0}
-CERTBOT_EMAIL=${CERTBOT_EMAIL:-}
-# Cloudflare API token for DNS-01 (scoped to zone DNS edit)
-CF_API_TOKEN=${CF_API_TOKEN:-}
-CERTBOT_DNS_PROPAGATION=${CERTBOT_DNS_PROPAGATION:-60}
-
-# Feature flags (1/true/yes to enable)
+# Feature flags
 APT_INSTALL=${APT_INSTALL:-1}
 SYSTEMD_ENABLE=${SYSTEMD_ENABLE:-1}
 NGINX_ENABLE=${NGINX_ENABLE:-1}
-
-# Build selection: auto | root | server, or provide BINARY_PATH
 BUILD_SOURCE=${BUILD_SOURCE:-auto}
 BINARY_PATH=${BINARY_PATH:-}
 
@@ -73,21 +53,21 @@ else
 fi
 
 echo "Building release (as user: $BUILD_USER)"
-## Auto-detect OS and install packages (Debian/apt)
+# Install packages (Debian/Ubuntu)
 if [ -f /etc/debian_version ]; then
   if is_enabled "$APT_INSTALL"; then
-    echo "Detected Debian-based OS. Installing system packages via apt..."
+    echo "Installing system packages..."
     APT_PKGS="build-essential pkg-config libsqlite3-dev ca-certificates curl git"
     if is_enabled "$NGINX_ENABLE"; then
-      APT_PKGS="$APT_PKGS nginx ufw certbot python3-certbot-nginx python3-certbot-dns-cloudflare"
+      APT_PKGS="$APT_PKGS nginx ufw"
     fi
     sudo apt-get update
     sudo apt-get install -y --no-install-recommends $APT_PKGS || true
   else
-    echo "APT_INSTALL disabled; skipping apt package installation."
+    echo "APT_INSTALL disabled; skipping package installation."
   fi
 else
-  echo "Non-Debian OS detected (or /etc/debian_version missing). Skipping package install step."
+  echo "Non-Debian OS detected. Skipping package install."
 fi
 
 # Ensure a system user exists (service user)
@@ -164,61 +144,7 @@ sudo mkdir -p "$UPLOADS_DIR" "$DATA_DIR"
 sudo chown -R "$SERVICE_USER":"$SERVICE_GROUP" "$UPLOADS_DIR" "$DATA_DIR"
 sudo chmod 750 "$UPLOADS_DIR" "$DATA_DIR"
 
-# Ensure SSL dir exists if nginx is enabled
-if is_enabled "$NGINX_ENABLE"; then
-  echo "Ensuring SSL dir exists at $CF_SSL_DIR"
-  sudo mkdir -p "$CF_SSL_DIR"
-  sudo chmod 700 "$CF_SSL_DIR"
-fi
-
-# Obtain Let's Encrypt certificate (optional, before nginx site is active)
-obtain_certbot_cert() {
-  local domain="$1"
-  local email="$2"
-  local proxied="$3"
-  local have_cert=0
-  if [ -f "/etc/letsencrypt/live/$domain/fullchain.pem" ] && [ -f "/etc/letsencrypt/live/$domain/privkey.pem" ]; then
-    have_cert=1
-  fi
-  if [ $have_cert -eq 1 ]; then
-    echo "Let's Encrypt cert already present for $domain"
-    return 0
-  fi
-  if ! is_enabled "$CERTBOT_ENABLE"; then
-    echo "CERTBOT_ENABLE=0; skipping Let's Encrypt issuance"
-    return 0
-  fi
-  if [ -z "$email" ]; then
-    echo "WARN: CERTBOT_EMAIL is empty; skipping Let's Encrypt issuance"
-    return 0
-  fi
-  echo "Attempting Let's Encrypt issuance for $domain"
-  if is_enabled "$proxied"; then
-    if [ -z "$CF_API_TOKEN" ]; then
-      echo "WARN: PROXIED_API=1 but CF_API_TOKEN not set; cannot perform DNS-01. Skipping LE issuance."
-      return 0
-    fi
-    echo "Using DNS-01 with Cloudflare for $domain"
-    sudo mkdir -p /root/.secrets/certbot
-    local cf_ini="/root/.secrets/certbot/cloudflare.ini"
-    sudo bash -c "umask 077 && echo 'dns_cloudflare_api_token=$CF_API_TOKEN' > '$cf_ini'"
-    sudo certbot certonly \
-      --non-interactive --agree-tos -m "$email" \
-      --dns-cloudflare --dns-cloudflare-credentials "$cf_ini" \
-      --dns-cloudflare-propagation-seconds "$CERTBOT_DNS_PROPAGATION" \
-      -d "$domain" || true
-  else
-    echo "Using standalone HTTP-01 for $domain (temporarily binding :80)"
-    # Try to stop nginx if it is running
-    if command -v nginx >/dev/null 2>&1; then
-      sudo systemctl stop nginx || true
-    fi
-    sudo certbot certonly --standalone \
-      --non-interactive --agree-tos -m "$email" \
-      --preferred-challenges http \
-      -d "$domain" || true
-  fi
-}
+# Note: SSL handled by Cloudflare (no certificate management needed)
 
 # Write (or update) env file for systemd
 write_env_file() {
@@ -269,100 +195,34 @@ UNIT
   sudo systemctl enable "$SERVICE_NAME" || true
 fi
 
-### Nginx site setup (optional)
+# Setup nginx (HTTP only - Cloudflare handles HTTPS)
 if is_enabled "$NGINX_ENABLE"; then
-  # For Cloudflare proxied domains, we don't need LE certs - CF handles HTTPS
-  if ! is_enabled "$PROXIED_API"; then
-    # Only obtain LE cert if NOT behind Cloudflare
-    obtain_certbot_cert "$API_DOMAIN" "$CERTBOT_EMAIL" "$PROXIED_API"
-  fi
-
-  echo "Generating nginx site config for $API_DOMAIN (Cloudflare proxied: $PROXIED_API)"
+  echo "Configuring nginx reverse proxy for $DOMAIN"
   
-  # For Cloudflare-proxied domains: use HTTP only (CF handles HTTPS)
-  if is_enabled "$PROXIED_API"; then
-    sudo tee "$NGINX_SITE_PATH" > /dev/null <<NGX
+  sudo tee "$NGINX_SITE_PATH" > /dev/null <<NGX
 server {
     listen 80;
-    http2 on;
-    server_name ${API_DOMAIN};
+    server_name ${DOMAIN};
 
     client_max_body_size 1024M;
 
-    # Cloudflare will handle SSL/TLS, so we trust CF headers
-    add_header X-Content-Type-Options nosniff;
-    add_header X-Frame-Options DENY;
-
     location / {
-        proxy_pass http://127.0.0.1:$APP_PORT;
+        proxy_pass http://127.0.0.1:${APP_PORT};
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Proto https;
         proxy_read_timeout 90s;
     }
 }
 NGX
-    echo "Cloudflare-proxied domain configured (HTTP only - CF handles HTTPS)"
-  else
-    # Non-Cloudflare setup: use HTTPS
-    TLS_CERT_PATH="/etc/letsencrypt/live/${API_DOMAIN}/fullchain.pem"
-    TLS_KEY_PATH="/etc/letsencrypt/live/${API_DOMAIN}/privkey.pem"
-    if [ ! -f "$TLS_CERT_PATH" ] || [ ! -f "$TLS_KEY_PATH" ]; then
-      TLS_CERT_PATH="$CF_SSL_DIR/${NGINX_SERVER_NAME}.crt"
-      TLS_KEY_PATH="$CF_SSL_DIR/${NGINX_SERVER_NAME}.key"
-      echo "Using TLS from $TLS_CERT_PATH"
-    else
-      echo "Using Let's Encrypt cert at $TLS_CERT_PATH"
-    fi
 
-    sudo tee "$NGINX_SITE_PATH" > /dev/null <<NGX
-server {
-    listen 80;
-    server_name ${API_DOMAIN};
-    return 301 https://\$host\$request_uri;
-}
-
-server {
-    listen 443 ssl;
-    http2 on;
-    server_name ${API_DOMAIN};
-
-    ssl_certificate $TLS_CERT_PATH;
-    ssl_certificate_key $TLS_KEY_PATH;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers off;
-
-    client_max_body_size 1024M;
-
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
-    add_header X-Content-Type-Options nosniff;
-    add_header X-Frame-Options DENY;
-
-    location / {
-        proxy_pass http://127.0.0.1:$APP_PORT;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_read_timeout 90s;
-    }
-}
-NGX
-  fi
-
-  echo "Enabling nginx site"
   sudo ln -sf "$NGINX_SITE_PATH" "/etc/nginx/sites-enabled/$SERVICE_NAME"
+  sudo nginx -t && echo "✓ Nginx config valid"
 
-  echo "Testing nginx configuration"
-  sudo nginx -t || true
-
+  # Allow HTTP port
   if command -v ufw >/dev/null 2>&1; then
-    if is_enabled "$PROXIED_API"; then
-      sudo ufw allow 80/tcp || true
-    else
-      sudo ufw allow 'Nginx Full' || true
-    fi
+    sudo ufw allow 80/tcp || true
   fi
 fi
 
@@ -379,64 +239,16 @@ if is_enabled "$NGINX_ENABLE"; then
   fi
 fi
 
-echo "Done. To follow logs: sudo journalctl -u $SERVICE_NAME -f"
-
-### Optional: write Cloudflare Origin cert/key if provided via environment or file
-# WARNING: storing private keys in environment or repo is sensitive. Prefer uploading
-# cert/key to the server via scp or using a secrets manager. This helper exists for
-# automation convenience.
-if is_enabled "$NGINX_ENABLE"; then
-  echo "Checking for Cloudflare Origin certificate inputs..."
-  sudo mkdir -p "$CF_SSL_DIR"
-  sudo chmod 700 "$CF_SSL_DIR"
-
-  CRT_TARGET="$CF_SSL_DIR/${NGINX_SERVER_NAME}.crt"
-  KEY_TARGET="$CF_SSL_DIR/${NGINX_SERVER_NAME}.key"
-
-  if [ -n "${CF_ORIGIN_CERT_FILE:-}" ] && [ -f "$CF_ORIGIN_CERT_FILE" ]; then
-    echo "Copying origin cert from file $CF_ORIGIN_CERT_FILE to $CRT_TARGET"
-    sudo cp -f "$CF_ORIGIN_CERT_FILE" "$CRT_TARGET"
-  fi
-  if [ -n "${CF_ORIGIN_KEY_FILE:-}" ] && [ -f "$CF_ORIGIN_KEY_FILE" ]; then
-    echo "Copying origin key from file $CF_ORIGIN_KEY_FILE to $KEY_TARGET"
-    sudo cp -f "$CF_ORIGIN_KEY_FILE" "$KEY_TARGET"
-  fi
-
-  if [ -n "${CF_ORIGIN_CERT:-}" ] && [ ! -f "$CRT_TARGET" ]; then
-    echo "Writing origin cert from CF_ORIGIN_CERT env var to $CRT_TARGET"
-    printf '%s' "$CF_ORIGIN_CERT" | sudo tee "$CRT_TARGET" > /dev/null
-  fi
-  if [ -n "${CF_ORIGIN_KEY:-}" ] && [ ! -f "$KEY_TARGET" ]; then
-    echo "Writing origin key from CF_ORIGIN_KEY env var to $KEY_TARGET"
-    printf '%s' "$CF_ORIGIN_KEY" | sudo tee "$KEY_TARGET" > /dev/null
-  fi
-
-  if [ -f "$KEY_TARGET" ] || [ -f "$CRT_TARGET" ]; then
-    sudo chown root:root "$CF_SSL_DIR"/*
-    sudo chmod 600 "$KEY_TARGET" || true
-    sudo chmod 644 "$CRT_TARGET" || true
-    echo "Origin cert/key present at $CF_SSL_DIR/"
-  fi
-fi
-
-# Final summary
-echo
-echo "========== $SERVICE_NAME installation summary =========="
-echo "Install dir:       $INSTALL_DIR"
-echo "Binary installed:  $BIN_TARGET"
-echo "Data dir:          $DATA_DIR"
-echo "Uploads dir:       $UPLOADS_DIR"
-echo "Env file:          $ENV_FILE"
-if is_enabled "$SYSTEMD_ENABLE"; then
-  echo "Systemd unit:      $SYSTEMD_UNIT (service: $SERVICE_NAME)"
-else
-  echo "Systemd unit:      disabled (set SYSTEMD_ENABLE=1 to enable)"
-fi
-if is_enabled "$NGINX_ENABLE"; then
-  echo "Nginx site:        $NGINX_SITE_PATH (server_name: $API_DOMAIN)"
-  echo "TLS cert path:     $TLS_CERT_PATH"
-  echo "TLS key path:      $TLS_KEY_PATH"
-else
-  echo "Nginx:             disabled (set NGINX_ENABLE=1 to enable)"
-fi
-echo "========================================================"
+echo ""
+echo "✓ Done! To follow logs: sudo journalctl -u $SERVICE_NAME -f"
+echo ""
+echo "========== Installation Summary =========="
+echo "Service:     $SERVICE_NAME"
+echo "Domain:      $DOMAIN"
+echo "Install:     $INSTALL_DIR/$BIN_NAME"
+echo "Data:        $DATA_DIR"
+echo "Uploads:     $UPLOADS_DIR"
+echo "App Port:    $APP_PORT (internal)"
+echo "Nginx:       Port 80 → localhost:$APP_PORT"
+echo "SSL:         Cloudflare (auto)"
+echo "========================================"

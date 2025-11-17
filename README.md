@@ -65,10 +65,10 @@ cargo build --release
 ## 🏗️ Architecture
 
 - **Backend**: Rust + Axum web framework
-- **Frontend**: Server-side rendered HTML (no JavaScript)
+- **Frontend**: React + Vite (TypeScript)
 - **Database**: SQLite for metadata storage
 - **Storage**: Local filesystem for uploaded files
-- **Templates**: Askama for type-safe HTML rendering
+- **API**: RESTful endpoints for uploads and link management
 
 ## 🔧 Configuration
 

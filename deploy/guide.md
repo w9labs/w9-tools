@@ -5,8 +5,8 @@
 # Alwways update Auto-setup install.sh script (If needed).
 # Update sitemap.xml and robots.txt after create any newpages or transition.
 
-- Change the project name to W9
-- Make the frontend and backend ready for one domain: w9.se architecture.
-- Clean rust frontend (will be handle by Next.js)
-- Find a way that current database and generated links will remain the same.
-- Clean the project any unneeded files.
+- Change the project name to W9 ✅
+- Make the frontend and backend ready for one domain: w9.se architecture. ✅
+- Clean rust frontend (using Vite React frontend) ✅
+- Find a way that current database and generated links will remain the same. ✅
+- Clean the project any unneeded files. ✅
