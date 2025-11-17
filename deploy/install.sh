@@ -45,8 +45,8 @@ BUILD_USER="${SUDO_USER:-$(whoami)}"
 
 # Install packages (only if needed)
 echo "Checking packages..."
-sudo apt-get update -qq
-sudo apt-get install -y build-essential pkg-config libsqlite3-dev nodejs npm nginx ufw openssl 2>&1 | grep -E "Setting up|already|0 upgraded" | tail -5
+sudo apt-get update -qq 2>&1 | grep -E "Reading|Building|Hit|Get" | tail -3
+sudo apt-get install -y build-essential pkg-config libsqlite3-dev nodejs npm nginx ufw openssl 2>&1 | grep -E "^(Setting up|0 upgraded)" || true
 
 # Create service user
 id -u $SERVICE_USER >/dev/null 2>&1 || sudo useradd --system --create-home --home-dir $INSTALL_DIR --shell /usr/sbin/nologin $SERVICE_USER
@@ -54,16 +54,16 @@ id -u $SERVICE_USER >/dev/null 2>&1 || sudo useradd --system --create-home --hom
 # Build backend
 echo "Building backend..."
 if [ "$BUILD_USER" != "root" ]; then
-  sudo -u $BUILD_USER bash -lc "cd '$ROOT_DIR' && cargo build --release"
+  sudo -u $BUILD_USER bash -lc "cd '$ROOT_DIR' && cargo build --release 2>&1" | tail -1
 else
-  bash -lc "cd '$ROOT_DIR' && cargo build --release"
+  bash -lc "cd '$ROOT_DIR' && cargo build --release 2>&1" | tail -1
 fi
 
 # Build frontend
 echo "Building frontend..."
 cd "$ROOT_DIR/frontend"
-npm install --silent
-npm run build 2>&1 | grep -E "error|warning|✓|built" || true
+npm install --silent 2>&1 | grep -i "added\|up to date" | head -1 || echo "npm install done"
+npm run build 2>&1 | grep -E "^(✓|error)" | tail -1 || echo "Frontend built"
 
 # Install binary
 echo "Installing binary..."
