@@ -53,6 +53,11 @@ stop_existing_service() {
         sudo systemctl stop "$SERVICE_NAME" || true
         sleep 1
       fi
+      # prevent systemd from auto-restarting while install runs
+      if systemctl is-enabled "$SERVICE_NAME" >/dev/null 2>&1; then
+        echo "Temporarily disabling $SERVICE_NAME to avoid auto-restarts"
+        sudo systemctl disable "$SERVICE_NAME" >/dev/null 2>&1 || true
+      fi
     fi
   fi
 }
