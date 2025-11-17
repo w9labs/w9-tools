@@ -193,7 +193,7 @@ function AdminPanel() {
                     <td style={{ border: '1px solid #ddd', padding: '8px' }}>
                       <button
                         onClick={async () => {
-                          const resp = await fetch(adminApi(`/items/${item.code}/delete`), {
+                          const resp = await fetch(adminApi(`/items/${item.code}`), {
                             method: 'POST',
                             credentials: 'include'
                           })
