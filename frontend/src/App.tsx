@@ -298,8 +298,8 @@ export default function App() {
   return (
     <div className="app">
       <main className="container">
-        <h1>w9</h1>
-        <p className="subtitle">Share a link or upload a file · get a short URL</p>
+        <h1>w9 - URL Shortener & File Sharer</h1>
+        <p className="subtitle">Share a link or upload a file · get a short URL with QR code</p>
 
         <form onSubmit={handleSubmit} className="form">
           <div

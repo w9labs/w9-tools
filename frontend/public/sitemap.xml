@@ -3,17 +3,19 @@
   <url>
     <loc>https://w9.se/</loc>
     <changefreq>daily</changefreq>
-    <lastmod>2025-11-17</lastmod>
-  </url>
-  <url>
-    <loc>https://w9.se/admin</loc>
-    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
     <lastmod>2025-11-17</lastmod>
   </url>
   <url>
     <loc>https://w9.se/admin/login</loc>
-    <changefreq>weekly</changefreq>
+    <changefreq>never</changefreq>
+    <priority>0.3</priority>
+    <lastmod>2025-11-17</lastmod>
+  </url>
+  <url>
+    <loc>https://w9.se/admin</loc>
+    <changefreq>never</changefreq>
+    <priority>0.1</priority>
     <lastmod>2025-11-17</lastmod>
   </url>
 </urlset>
-

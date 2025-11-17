@@ -1,8 +1,10 @@
+User-agent: *
+Allow: /
 Disallow: /api/
 Disallow: /files/
 Disallow: /admin
 Disallow: /admin/login
-Allow: /
+Disallow: /r/
+Crawl-delay: 1
 
 Sitemap: https://w9.se/sitemap.xml
-
