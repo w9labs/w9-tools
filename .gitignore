@@ -18,4 +18,9 @@ Cargo.lock
 /frontend/node_modules
 /frontend/dist
 /frontend/.env
+
+# Favicon generator (use embedded SVG instead)
+/favicon_io
+
+# Local guides
 guide.md
