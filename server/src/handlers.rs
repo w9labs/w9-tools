@@ -984,14 +984,14 @@ fn render_markdown(md: &str) -> String {
         }
     };
     for (idx, mat) in block_pattern.find_iter(md).enumerate() {
-        let placeholder = format!("__MATH_EXPR_{}__", idx);
+        // Use a code block as placeholder - markdown will preserve it exactly
+        let placeholder = format!("```MATH_BLOCK_{}```", idx);
         math_expressions.push((placeholder.clone(), mat.as_str().to_string()));
         protected = protected.replacen(mat.as_str(), &placeholder, 1);
     }
     
     // Protect inline math $...$ (but not $$)
     // Since block math is already replaced with placeholders, we can safely match $...$
-    // But we need to avoid matching placeholders themselves
     if let Ok(inline_pattern) = regex::Regex::new(r#"\$[^$\n]+\$"#) {
         let mut inline_count = math_expressions.len();
         // Collect all matches first and extract strings
@@ -1000,7 +1000,8 @@ fn render_markdown(md: &str) -> String {
             .map(|m| m.as_str().to_string())
             .collect();
         for math_expr in inline_matches {
-            let placeholder = format!("__MATH_EXPR_{}__", inline_count);
+            // Use inline code as placeholder - markdown will preserve it
+            let placeholder = format!("`MATH_INLINE_{}`", inline_count);
             math_expressions.push((placeholder.clone(), math_expr.clone()));
             protected = protected.replacen(&math_expr, &placeholder, 1);
             inline_count += 1;
@@ -1015,9 +1016,30 @@ fn render_markdown(md: &str) -> String {
     html::push_html(&mut html_output, parser);
     
     // Restore math expressions (KaTeX will render them on the client side)
-    for (placeholder, math_expr) in math_expressions.iter() {
-        // Preserve the math expression as-is (KaTeX will handle rendering)
-        html_output = html_output.replace(placeholder, math_expr);
+    // Replace in reverse order to avoid conflicts
+    // Code blocks become <pre><code>...</code></pre>, inline code becomes <code>...</code>
+    for (placeholder, math_expr) in math_expressions.iter().rev() {
+        if placeholder.starts_with("```") {
+            // Block math: replace <pre><code>MATH_BLOCK_N</code></pre> with the actual math
+            let code_content = placeholder.trim_start_matches("```").trim_end_matches("```");
+            let code_block_pattern = format!(r#"<pre><code[^>]*>{}</code></pre>"#, regex::escape(code_content));
+            if let Ok(re) = regex::Regex::new(&code_block_pattern) {
+                html_output = re.replace_all(&html_output, math_expr).to_string();
+            } else {
+                // Fallback: simple string replace
+                html_output = html_output.replace(&format!("<pre><code>{}</code></pre>", code_content), math_expr);
+            }
+        } else if placeholder.starts_with('`') {
+            // Inline math: replace <code>MATH_INLINE_N</code> with the actual math
+            let code_content = placeholder.trim_matches('`');
+            let inline_code_pattern = format!(r#"<code[^>]*>{}</code>"#, regex::escape(code_content));
+            if let Ok(re) = regex::Regex::new(&inline_code_pattern) {
+                html_output = re.replace_all(&html_output, math_expr).to_string();
+            } else {
+                // Fallback: simple string replace
+                html_output = html_output.replace(&format!("<code>{}</code>", code_content), math_expr);
+            }
+        }
     }
     
     html_output
