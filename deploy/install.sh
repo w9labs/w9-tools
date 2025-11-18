@@ -235,18 +235,6 @@ server {
         add_header Cache-Control "public, immutable";
     }
 
-    # Sitemap and robots.txt - serve with correct content type
-    location = /sitemap.xml {
-        try_files $uri =404;
-        add_header Content-Type "application/xml; charset=utf-8";
-        expires 1d;
-    }
-    location = /robots.txt {
-        try_files $uri =404;
-        add_header Content-Type "text/plain; charset=utf-8";
-        expires 1d;
-    }
-
     # Frontend SPA
     location / { try_files $uri $uri/ /index.html; }
 
