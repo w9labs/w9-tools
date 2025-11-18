@@ -24,16 +24,4 @@
     <priority>0.5</priority>
     <lastmod>2025-01-20</lastmod>
   </url>
-  <url>
-    <loc>https://w9.se/admin/login</loc>
-    <changefreq>never</changefreq>
-    <priority>0.3</priority>
-    <lastmod>2025-01-20</lastmod>
-  </url>
-  <url>
-    <loc>https://w9.se/admin</loc>
-    <changefreq>never</changefreq>
-    <priority>0.1</priority>
-    <lastmod>2025-01-20</lastmod>
-  </url>
 </urlset>
