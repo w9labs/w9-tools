@@ -953,7 +953,9 @@ fn render_markdown(md: &str) -> String {
     // Match $...$ that are not part of $$
     let inline_pattern = regex::Regex::new(r"(?<!\$)\$[^$\n]+\$(?!\$)").unwrap();
     let mut inline_count = math_expressions.len();
-    for mat in inline_pattern.find_iter(&protected) {
+    // Collect all matches first
+    let inline_matches: Vec<_> = inline_pattern.find_iter(&protected).collect();
+    for mat in inline_matches {
         let placeholder = format!("__MATH_EXPR_{}__", inline_count);
         math_expressions.push((placeholder.clone(), mat.as_str().to_string()));
         protected = protected.replacen(mat.as_str(), &placeholder, 1);
