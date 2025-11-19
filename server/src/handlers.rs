@@ -964,124 +964,188 @@ pub async fn api_upload(State(state): State<AppState>, mut multipart: Multipart)
 }
 
 fn render_markdown(md: &str) -> String {
-    use pulldown_cmark::{Parser, html};
-    
-    // Protect math delimiters from markdown processing
-    // Replace $...$ and $$...$$ with placeholders, then restore after markdown rendering
-    let mut protected = md.to_string();
-    let mut math_expressions: Vec<(String, String)> = Vec::new();
-    
-    // Protect block math $$...$$ first (before inline $...$)
-    // Use non-greedy matching to handle multiple block math expressions
-    let block_pattern = match regex::Regex::new(r"\$\$[\s\S]*?\$\$") {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::error!("Failed to compile block math regex: {}", e);
-            // Fall back to simple markdown rendering without math protection
-            let parser = Parser::new(md);
-            let mut html_output = String::new();
-            html::push_html(&mut html_output, parser);
-            return html_output;
+    use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag};
+
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_FOOTNOTES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TASKLISTS);
+
+    let parser = Parser::new_ext(md, options);
+    let mut events: Vec<Event> = Vec::new();
+    let mut code_block_depth = 0usize;
+
+    for event in parser {
+        match &event {
+            Event::Start(Tag::CodeBlock(_)) => {
+                code_block_depth += 1;
+                events.push(event);
+            }
+            Event::End(Tag::CodeBlock(_)) => {
+                if code_block_depth > 0 {
+                    code_block_depth -= 1;
+                }
+                events.push(event);
+            }
+            Event::Text(text) if code_block_depth == 0 => {
+                let transformed = transform_math_segments(text);
+                if transformed.is_empty() {
+                    events.push(Event::Text(CowStr::Boxed(text.to_string().into_boxed_str())));
+                } else {
+                    events.extend(transformed);
+                }
+            }
+            _ => events.push(event),
         }
-    };
-    
-    // Collect all block math matches with their positions
-    let mut block_matches: Vec<(usize, usize, String)> = block_pattern
-        .find_iter(md)
-        .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-        .collect();
-    
-    // Replace block math from end to start to preserve positions
-    for (idx, (start, end, math_expr)) in block_matches.iter().enumerate().rev() {
-        let placeholder = format!("```MATH_BLOCK_{}```", idx);
-        math_expressions.push((placeholder.clone(), math_expr.clone()));
-        protected.replace_range(*start..*end, &placeholder);
     }
-    
-    // Protect inline math $...$ (but not $$)
-    // Match $ followed by non-$ characters (at least one) and ending with $
-    // Use a more permissive pattern that handles edge cases
-    if let Ok(inline_pattern) = regex::Regex::new(r#"\$[^$\n\r]+\$"#) {
-        let mut inline_count = math_expressions.len();
-        // Collect all matches with their positions from the protected string
-        let mut inline_matches: Vec<(usize, usize, String)> = inline_pattern
-            .find_iter(&protected)
-            .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-            .collect();
-        
-        // Replace from end to start to preserve positions
-        for (start, end, math_expr) in inline_matches.iter().rev() {
-            let placeholder = format!("`MATH_INLINE_{}`", inline_count);
-            math_expressions.push((placeholder.clone(), math_expr.clone()));
-            protected.replace_range(*start..*end, &placeholder);
-            inline_count += 1;
-        }
-    } else {
-        tracing::warn!("Failed to compile inline math regex, continuing without inline math protection");
-    }
-    
-    // Render markdown
-    let parser = Parser::new(&protected);
+
     let mut html_output = String::new();
-    html::push_html(&mut html_output, parser);
-    
-    // Restore math expressions (KaTeX will render them on the client side)
-    // Replace in reverse order to avoid conflicts
-    // Code blocks become <pre><code>...</code></pre>, inline code becomes <code>...</code>
-    for (placeholder, math_expr) in math_expressions.iter().rev() {
-        if placeholder.starts_with("```") {
-            // Block math: replace <pre><code>MATH_BLOCK_N</code></pre> with the actual math
-            let code_content = placeholder.trim_start_matches("```").trim_end_matches("```");
-            // Try multiple replacement strategies
-            let escaped_content = html_escape::encode_text(code_content);
-            
-            // Strategy 1: Direct code block replacement (most common)
-            let direct_pattern = format!(r#"<pre><code[^>]*>\s*{}\s*</code></pre>"#, regex::escape(code_content));
-            if let Ok(re) = regex::Regex::new(&direct_pattern) {
-                html_output = re.replace_all(&html_output, math_expr).to_string();
-            }
-            
-            // Strategy 2: HTML-escaped version
-            let escaped_pattern = format!(r#"<pre><code[^>]*>\s*{}\s*</code></pre>"#, regex::escape(&escaped_content));
-            if let Ok(re) = regex::Regex::new(&escaped_pattern) {
-                html_output = re.replace_all(&html_output, math_expr).to_string();
-            }
-            
-            // Strategy 3: Simple string replace fallback
-            html_output = html_output.replace(&format!("<pre><code>{}</code></pre>", code_content), math_expr);
-            html_output = html_output.replace(&format!("<pre><code>{}</code></pre>", escaped_content), math_expr);
+    html::push_html(&mut html_output, events.into_iter());
+    html_output
+}
 
-            // Strategy 4: Fallback direct placeholder replacement (handles cases where markdown simplifies code block)
-            html_output = html_output.replace(code_content, math_expr);
-            html_output = html_output.replace(escaped_content.as_ref(), math_expr);
-        } else if placeholder.starts_with('`') {
-            // Inline math: replace <code>MATH_INLINE_N</code> with the actual math
-            let code_content = placeholder.trim_matches('`');
-            let escaped_content = html_escape::encode_text(code_content);
-            
-            // Strategy 1: Direct inline code replacement
-            let direct_pattern = format!(r#"<code[^>]*>\s*{}\s*</code>"#, regex::escape(code_content));
-            if let Ok(re) = regex::Regex::new(&direct_pattern) {
-                html_output = re.replace_all(&html_output, math_expr).to_string();
-            }
-            
-            // Strategy 2: HTML-escaped version
-            let escaped_pattern = format!(r#"<code[^>]*>\s*{}\s*</code>"#, regex::escape(&escaped_content));
-            if let Ok(re) = regex::Regex::new(&escaped_pattern) {
-                html_output = re.replace_all(&html_output, math_expr).to_string();
-            }
-            
-            // Strategy 3: Simple string replace fallback
-            html_output = html_output.replace(&format!("<code>{}</code>", code_content), math_expr);
-            html_output = html_output.replace(&format!("<code>{}</code>", escaped_content), math_expr);
+fn transform_math_segments(text: &str) -> Vec<pulldown_cmark::Event<'static>> {
+    use pulldown_cmark::{CowStr, Event};
 
-            // Strategy 4: direct placeholder replacement
-            html_output = html_output.replace(code_content, math_expr);
-            html_output = html_output.replace(escaped_content.as_ref(), math_expr);
+    let segments = split_math_segments(text);
+    let contains_math = segments
+        .iter()
+        .any(|segment| matches!(segment, MathSegment::Inline(_) | MathSegment::Block(_)));
+
+    if !contains_math {
+        return Vec::new();
+    }
+
+    let mut events = Vec::with_capacity(segments.len());
+    for segment in segments {
+        match segment {
+            MathSegment::Plain(s) => {
+                if !s.is_empty() {
+                    events.push(Event::Text(CowStr::Boxed(s.into_boxed_str())));
+                }
+            }
+            MathSegment::Inline(tex) => {
+                let encoded = html_escape::encode_double_quoted_attribute(&tex);
+                let html = format!(
+                    r#"<span class="math-fragment math-inline" data-math="inline" data-tex="{}"></span>"#,
+                    encoded
+                );
+                events.push(Event::Html(CowStr::Boxed(html.into_boxed_str())));
+            }
+            MathSegment::Block(tex) => {
+                let encoded = html_escape::encode_double_quoted_attribute(&tex);
+                let html = format!(
+                    r#"<div class="math-fragment math-block" data-math="block" data-tex="{}"></div>"#,
+                    encoded
+                );
+                events.push(Event::Html(CowStr::Boxed(html.into_boxed_str())));
+            }
         }
     }
-    
-    html_output
+
+    events
+}
+
+#[derive(Debug)]
+enum MathSegment {
+    Plain(String),
+    Inline(String),
+    Block(String),
+}
+
+fn split_math_segments(text: &str) -> Vec<MathSegment> {
+    let mut segments = Vec::new();
+    let mut buffer = String::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut idx = 0usize;
+
+    while idx < chars.len() {
+        let ch = chars[idx];
+
+        if ch == '\\' {
+            if idx + 1 < chars.len() && (chars[idx + 1] == '$' || chars[idx + 1] == '\\') {
+                buffer.push(chars[idx + 1]);
+                idx += 2;
+                continue;
+            }
+            buffer.push(ch);
+            idx += 1;
+            continue;
+        }
+
+        if ch == '$' {
+            let delimiter = if idx + 1 < chars.len() && chars[idx + 1] == '$' {
+                2
+            } else {
+                1
+            };
+
+            if let Some((next_idx, content)) = find_math_content(&chars, idx, delimiter) {
+                let trimmed = content.trim();
+                if !trimmed.is_empty() {
+                    if !buffer.is_empty() {
+                        segments.push(MathSegment::Plain(std::mem::take(&mut buffer)));
+                    }
+
+                    if delimiter == 2 {
+                        segments.push(MathSegment::Block(trimmed.to_string()));
+                    } else {
+                        segments.push(MathSegment::Inline(trimmed.to_string()));
+                    }
+
+                    idx = next_idx;
+                    continue;
+                } else {
+                    let raw: String = chars[idx..next_idx].iter().collect();
+                    buffer.push_str(&raw);
+                    idx = next_idx;
+                    continue;
+                }
+            }
+        }
+
+        buffer.push(ch);
+        idx += 1;
+    }
+
+    if !buffer.is_empty() {
+        segments.push(MathSegment::Plain(buffer));
+    }
+
+    segments
+}
+
+fn find_math_content(chars: &[char], start: usize, delimiter: usize) -> Option<(usize, String)> {
+    let open_end = start + delimiter;
+    if open_end >= chars.len() {
+        return None;
+    }
+
+    let mut idx = open_end;
+    while idx < chars.len() {
+        if chars[idx] == '\\' {
+            idx += 2;
+            continue;
+        }
+
+        if delimiter == 2 {
+            if idx + 1 < chars.len() && chars[idx] == '$' && chars[idx + 1] == '$' {
+                let content: String = chars[open_end..idx].iter().collect();
+                return Some((idx + 2, content));
+            }
+        } else if chars[idx] == '$' {
+            let content: String = chars[open_end..idx].iter().collect();
+            if content.contains('\n') {
+                return None;
+            }
+            return Some((idx + 1, content));
+        }
+
+        idx += 1;
+    }
+
+    None
 }
 
 #[debug_handler]

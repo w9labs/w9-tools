@@ -259,15 +259,23 @@ pub struct VideoTemplate { pub filename: String, pub file_url: String, pub mime:
       .content ul,.content ol{margin-left:1.5rem;margin-bottom:1rem}
       .content li{color:#000}
       .content code{background:#f5f5f5;padding:0.2rem 0.4rem;border:1px solid #ddd;color:#000}
-      .content pre{background:#f5f5f5;padding:1rem;border:1px solid #ddd;overflow-x:auto;margin-bottom:1rem}
-      .content pre code{background:transparent;padding:0;border:none;color:#000}
+      .content pre{background:#f5f5f5;padding:1rem;border:1px solid #ddd;overflow-x:auto;margin-bottom:1rem;border-radius:4px}
+      .content pre code{background:transparent;padding:0;border:none;color:#000;white-space:pre}
       .content blockquote{border-left:3px solid #000;padding-left:1rem;margin-left:0;margin-bottom:1rem;color:#000}
       .content a{color:#000;text-decoration:underline}
       .content table{border-collapse:collapse;width:100%;margin-bottom:1rem}
       .content table th,.content table td{border:1px solid #000;padding:0.5rem;color:#000}
       .content table th{background:#f5f5f5}
+      .math-fragment{display:inline-flex;align-items:center;justify-content:center}
+      .math-inline{display:inline-flex}
+      .math-block{width:100%;margin:1.5rem 0;text-align:center}
       .katex{font-size:1.1em}
       .katex-display{margin:1rem 0;text-align:center}
+      .code-block{border:1px solid #ddd;background:#f8f8f8;margin-bottom:1.5rem;border-radius:4px;overflow:hidden}
+      .code-block-header{display:flex;align-items:center;justify-content:space-between;background:#000;color:#fff;padding:0.4rem 0.8rem;font-size:0.75rem;letter-spacing:0.05em;text-transform:uppercase}
+      .code-block-header button{font-family:inherit;font-size:0.7rem;background:transparent;color:inherit;border:1px solid rgba(255,255,255,0.5);padding:0.2rem 0.6rem;cursor:pointer;transition:opacity 0.2s}
+      .code-block-header button:hover{opacity:0.8}
+      .code-block pre{background:transparent;border:none;padding:1rem;margin:0;overflow:auto}
       .mermaid-diagram{margin:1.5rem 0;padding:1rem;border:1px solid #ddd;background:#f5f5f5;border-radius:4px;overflow:auto}
       .mermaid-diagram svg{width:100%;height:auto}
       @media(prefers-color-scheme:dark){
@@ -276,7 +284,7 @@ pub struct VideoTemplate { pub filename: String, pub file_url: String, pub mime:
       .actions{margin-top:2rem;display:flex;gap:1rem}
       a{font-family:inherit;font-size:14px;padding:0.5rem 1rem;background:#000;color:#fff;text-decoration:none;border:2px solid #000}
       a:hover{background:#fff;color:#000}
-      @media(prefers-color-scheme:dark){body{background:#000;color:#fff}main{background:#1a1a1a;border-color:#fff}.content{color:#fff}.content h1,.content h2,.content h3,.content h4,.content h5,.content h6{color:#fff}.content p{color:#fff}.content li{color:#fff}.content code,.content pre{background:#2a2a2a;border-color:#444;color:#fff}.content pre code{color:#fff}.content blockquote{border-color:#fff;color:#fff}.content a{color:#4a9eff}.content table th,.content table td{border-color:#fff;color:#fff}.content table th{background:#2a2a2a}a{background:#fff;color:#000;border-color:#fff}a:hover{background:#000;color:#fff}}
+      @media(prefers-color-scheme:dark){body{background:#000;color:#fff}main{background:#1a1a1a;border-color:#fff}.content{color:#fff}.content h1,.content h2,.content h3,.content h4,.content h5,.content h6{color:#fff}.content p{color:#fff}.content li{color:#fff}.content code,.content pre{background:#2a2a2a;border-color:#444;color:#fff}.content pre code{color:#fff}.content blockquote{border-color:#fff;color:#fff}.content a{color:#4a9eff}.content table th,.content table td{border-color:#fff;color:#fff}.content table th{background:#2a2a2a}.code-block{border-color:#444;background:#111}.code-block-header{background:#fff;color:#000}.code-block-header button{border-color:rgba(0,0,0,0.4)}.code-block pre{color:#fff}a{background:#fff;color:#000;border-color:#fff}a:hover{background:#000;color:#fff}}
     </style>
   </head>
   <body>
@@ -289,134 +297,37 @@ pub struct VideoTemplate { pub filename: String, pub file_url: String, pub mime:
     <script>
       function bootstrapNotepadEnhancements() {
         const content = document.querySelector(".content");
-        let katexRendered = false;
-
-        function renderDollarMath(root) {
-          if (!root) {
-            return;
-          }
-
-          const SKIP_TAGS = new Set(["SCRIPT","NOSCRIPT","STYLE","TEXTAREA","PRE","CODE"]);
-          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-          const targets = [];
-          while (walker.nextNode()) {
-            const node = walker.currentNode;
-            const parent = node.parentElement;
-            if (parent && SKIP_TAGS.has(parent.tagName)) {
-              continue;
-            }
-            targets.push(node);
-          }
-
-          const mathRegex = /\$\$([\s\S]+?)\$\$|\$([^$\n\r]+?)\$/g;
-
-          targets.forEach(function(textNode) {
-            const text = textNode.textContent || "";
-            let match;
-            let lastIndex = 0;
-            let replaced = false;
-            const fragment = document.createDocumentFragment();
-
-            mathRegex.lastIndex = 0;
-
-            while ((match = mathRegex.exec(text)) !== null) {
-              if (match.index > lastIndex) {
-                fragment.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
-              }
-
-              const tex = (match[1] || match[2] || "").trim();
-              const displayMode = Boolean(match[1]);
-              const el = document.createElement(displayMode ? "div" : "span");
-              if (displayMode) {
-                el.className = "katex-display";
-              }
-              try {
-                window.katex.render(tex, el, { displayMode, throwOnError: false });
-              } catch (err) {
-                console.error("KaTeX render error:", err);
-                el.textContent = match[0];
-              }
-              fragment.appendChild(el);
-
-              lastIndex = mathRegex.lastIndex;
-              replaced = true;
-            }
-
-            if (!replaced) {
-              return;
-            }
-
-            if (lastIndex < text.length) {
-              fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
-            }
-
-            textNode.parentNode.replaceChild(fragment, textNode);
-          });
+        if (!content) {
+          return;
         }
 
-        function processKaTeX() {
-          if (katexRendered) {
-            return;
-          }
+        function renderMathWhenReady() {
           if (!(window.katex && typeof window.katex.render === "function")) {
-            setTimeout(processKaTeX, 50);
-            return;
-          }
-          if (!content) {
+            setTimeout(renderMathWhenReady, 50);
             return;
           }
 
-          const latexBlocks = content.querySelectorAll("pre code.language-latex, pre code.latex");
-          latexBlocks.forEach(function(codeBlock) {
-            const tex = codeBlock.textContent || "";
-            const pre = codeBlock.parentElement;
-            if (!pre) {
-              return;
-            }
-            const container = document.createElement("div");
-            container.className = "katex-display";
+          const nodes = content.querySelectorAll("[data-math]");
+          nodes.forEach(function(node) {
+            const tex = node.getAttribute("data-tex") || "";
+            const displayMode = node.getAttribute("data-math") === "block";
             try {
-              window.katex.render(tex, container, { displayMode: true, throwOnError: false });
+              window.katex.render(tex, node, { displayMode, throwOnError: false });
+              node.classList.add(displayMode ? "katex-display" : "katex-inline");
             } catch (err) {
               console.error("KaTeX render error:", err);
-              const fallback = document.createElement("pre");
-              fallback.textContent = tex;
-              container.replaceChildren(fallback);
+              node.textContent = tex;
             }
-            pre.replaceWith(container);
           });
-
-          const preBlocks = content.querySelectorAll("pre");
-          preBlocks.forEach(function(pre) {
-            const code = pre.querySelector("code");
-            if (code && (code.classList.contains("language-mermaid") || code.classList.contains("mermaid") || code.classList.contains("language-latex") || code.classList.contains("latex"))) {
-              return;
-            }
-            const rawText = (code ? code.textContent : pre.textContent) || "";
-            const tex = rawText.trim();
-            if (!tex.startsWith("$$") || !tex.endsWith("$$")) {
-              return;
-            }
-            const container = document.createElement("div");
-            container.className = "katex-display";
-            try {
-              window.katex.render(tex.replace(/^\$\$|\$\$$/g, ""), container, { displayMode: true, throwOnError: false });
-            } catch (err) {
-              console.error("KaTeX render error:", err);
-              return;
-            }
-            pre.replaceWith(container);
-          });
-
-          renderDollarMath(content);
-          katexRendered = true;
         }
 
-        processKaTeX();
+        function convertMermaidBlocks() {
+          const mermaidBlocks = content.querySelectorAll("pre code.language-mermaid, pre code.mermaid");
+          if (mermaidBlocks.length === 0) {
+            return;
+          }
 
-        const mermaidBlocks = content ? content.querySelectorAll("pre code.language-mermaid, pre code.mermaid") : [];
-        if (mermaidBlocks.length > 0) {
-          mermaidBlocks.forEach(function(codeBlock, idx) {
+          mermaidBlocks.forEach(function(codeBlock) {
             const pre = codeBlock.parentElement;
             if (!pre) {
               return;
@@ -446,13 +357,71 @@ pub struct VideoTemplate { pub filename: String, pub file_url: String, pub mime:
             console.warn("Mermaid script not available, diagrams left as code blocks.");
           }
         }
+
+        function enhanceCodeBlocks() {
+          const pres = content.querySelectorAll("pre");
+          pres.forEach(function(pre) {
+            if (pre.dataset.enhanced === "true") {
+              return;
+            }
+            const code = pre.querySelector("code");
+            if (!code) {
+              return;
+            }
+            pre.dataset.enhanced = "true";
+            const langClass = Array.from(code.classList || []).find(function(cls) {
+              return cls.startsWith("language-");
+            });
+            const label = langClass ? langClass.replace("language-", "").toUpperCase() : "CODE";
+            const wrapper = document.createElement("div");
+            wrapper.className = "code-block";
+            const header = document.createElement("div");
+            header.className = "code-block-header";
+            const title = document.createElement("span");
+            title.textContent = label;
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = "Copy";
+            button.addEventListener("click", function() {
+              const text = code.textContent || "";
+              if (!(navigator.clipboard && navigator.clipboard.writeText)) {
+                return;
+              }
+              navigator.clipboard.writeText(text).then(function() {
+                button.textContent = "Copied";
+                setTimeout(function() {
+                  button.textContent = "Copy";
+                }, 1500);
+              }).catch(function(err) {
+                console.error("Copy failed:", err);
+              });
+            });
+            header.appendChild(title);
+            header.appendChild(button);
+            const parent = pre.parentNode;
+            if (!parent) {
+              return;
+            }
+            parent.insertBefore(wrapper, pre);
+            wrapper.appendChild(header);
+            wrapper.appendChild(pre);
+          });
+        }
+
+        function initEnhancements() {
+          convertMermaidBlocks();
+          enhanceCodeBlocks();
+          renderMathWhenReady();
+        }
+
+        if (document.readyState === "complete") {
+          initEnhancements();
+        } else {
+          window.addEventListener("load", initEnhancements, { once: true });
+        }
       }
 
-      if (document.readyState === "complete") {
-        bootstrapNotepadEnhancements();
-      } else {
-        window.addEventListener("load", bootstrapNotepadEnhancements, { once: true });
-      }
+      bootstrapNotepadEnhancements();
     </script>
   </body>
 </html>"#, ext = "html")]
