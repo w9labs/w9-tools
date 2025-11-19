@@ -1053,7 +1053,7 @@ fn render_markdown(md: &str) -> String {
 
             // Strategy 4: Fallback direct placeholder replacement (handles cases where markdown simplifies code block)
             html_output = html_output.replace(code_content, math_expr);
-            html_output = html_output.replace(&escaped_content, math_expr);
+            html_output = html_output.replace(escaped_content.as_ref(), math_expr);
         } else if placeholder.starts_with('`') {
             // Inline math: replace <code>MATH_INLINE_N</code> with the actual math
             let code_content = placeholder.trim_matches('`');
@@ -1077,7 +1077,7 @@ fn render_markdown(md: &str) -> String {
 
             // Strategy 4: direct placeholder replacement
             html_output = html_output.replace(code_content, math_expr);
-            html_output = html_output.replace(&escaped_content, math_expr);
+            html_output = html_output.replace(escaped_content.as_ref(), math_expr);
         }
     }
     
