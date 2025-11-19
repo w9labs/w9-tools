@@ -296,7 +296,8 @@ pub struct VideoTemplate { pub filename: String, pub file_url: String, pub mime:
               {left: "$$", right: "$$", display: true},
               {left: "$", right: "$", display: false}
             ],
-            throwOnError: false
+            throwOnError: false,
+            ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code"]
           });
         }
 
@@ -325,6 +326,30 @@ pub struct VideoTemplate { pub filename: String, pub file_url: String, pub mime:
           }
           pre.replaceWith(container);
         });
+
+        const katexReady = window.katex && typeof window.katex.render === "function";
+        if (content && katexReady) {
+          const genericBlocks = content.querySelectorAll("pre code:not(.language-mermaid):not(.mermaid):not(.language-latex):not(.latex)");
+          genericBlocks.forEach(function(codeBlock) {
+            const tex = (codeBlock.textContent || "").trim();
+            if (!tex.startsWith("$$") || !tex.endsWith("$$")) {
+              return;
+            }
+            const pre = codeBlock.parentElement;
+            if (!pre) {
+              return;
+            }
+            const container = document.createElement("div");
+            container.className = "katex-display";
+            try {
+              window.katex.render(tex.replace(/^\$\$|\$\$$/g, ""), container, { displayMode: true, throwOnError: false });
+            } catch (err) {
+              console.error("KaTeX render error:", err);
+              return;
+            }
+            pre.replaceWith(container);
+          });
+        }
 
         const mermaidBlocks = content ? content.querySelectorAll("pre code.language-mermaid, pre code.mermaid") : [];
         if (mermaidBlocks.length > 0) {
