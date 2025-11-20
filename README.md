@@ -32,8 +32,8 @@ The repository includes an opinionated installation script that compiles the bac
 
 1. Clone the repository on the target server:
    ```bash
-   git clone https://github.com/ShayNeeo/W9.git
-   cd W9/deploy
+   git clone https://github.com/ShayNeeo/w9-tools.git
+   cd w9-tools/deploy
    ```
 2. Set the environment variables used by the script (either export or inline):
    ```bash
