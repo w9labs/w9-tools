@@ -119,6 +119,7 @@ function AdminPanel() {
   const [error, setError] = useState<string | null>(null)
   const [deletingCode, setDeletingCode] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<string>('all')
+  const [expandedItem, setExpandedItem] = useState<any | null>(null)
   const [adminSection, setAdminSection] = useState<string>('items') // 'items' or 'users'
   
   // User management state
@@ -530,55 +531,65 @@ function AdminPanel() {
 
         {adminSection === 'items' && (
           <>
-        <div className="admin-tabs" style={{ marginTop: '1rem' }}>
-          {itemFilters.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`admin-tab ${activeTab === tab.id ? 'active' : ''}`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+            <div className="admin-tabs" style={{ marginTop: '1rem' }}>
+              {itemFilters.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`admin-tab ${activeTab === tab.id ? 'active' : ''}`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
 
-        {loading && <p>Loading items...</p>}
-        {error && <p style={{ color: 'red' }}>Error: {error}</p>}
-        {!loading && !error && (
-          <table style={{ width: '100%', marginTop: '20px', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th style={{ border: '1px solid #ddd', padding: '8px' }}>Code</th>
-                <th style={{ border: '1px solid #ddd', padding: '8px' }}>Type</th>
-                <th style={{ border: '1px solid #ddd', padding: '8px' }}>Value</th>
-                <th style={{ border: '1px solid #ddd', padding: '8px' }}>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredItems.length === 0 ? (
-                <tr><td colSpan={4} style={{ padding: '8px', textAlign: 'center' }}>No items</td></tr>
-              ) : (
-                filteredItems.map((item: any) => (
-                  <tr key={`${item.code}:${item.kind}`}>
-                    <td style={{ border: '1px solid #ddd', padding: '8px' }}>{item.code}</td>
-                    <td style={{ border: '1px solid #ddd', padding: '8px' }}>{item.kind}</td>
-                    <td style={{ border: '1px solid #ddd', padding: '8px', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.value}</td>
-                    <td style={{ border: '1px solid #ddd', padding: '8px' }}>
-                      <button
-                        onClick={() => handleDelete(item.code, item.kind)}
-                        className="button"
-                        style={{ fontSize: '12px' }}
-                        disabled={deletingCode === `${item.code}:${item.kind}`}
-                      >
-                        {deletingCode === `${item.code}:${item.kind}` ? 'Deleting...' : 'Delete'}
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        )}
+            {loading && <p>Loading items...</p>}
+            {error && <p style={{ color: 'red' }}>Error: {error}</p>}
+            {!loading && !error && (
+              <div className="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Code</th>
+                      <th>Type</th>
+                      <th>Value</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredItems.length === 0 ? (
+                      <tr><td colSpan={4} style={{ textAlign: 'center' }}>No items</td></tr>
+                    ) : (
+                      filteredItems.map((item: any) => (
+                        <tr key={`${item.code}:${item.kind}`}>
+                          <td>{item.code}</td>
+                          <td>{item.kind}</td>
+                          <td className="table-cell-truncate">{item.value}</td>
+                          <td>
+                            <div className="table-actions">
+                              <button
+                                className="button ghost"
+                                type="button"
+                                onClick={() => setExpandedItem(item)}
+                              >
+                                View
+                              </button>
+                              <button
+                                onClick={() => handleDelete(item.code, item.kind)}
+                                className="button"
+                                disabled={deletingCode === `${item.code}:${item.kind}`}
+                              >
+                                {deletingCode === `${item.code}:${item.kind}` ? 'Deleting...' : 'Delete'}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </>
         )}
 
@@ -639,108 +650,106 @@ function AdminPanel() {
                 {usersLoading && <p>Loading users...</p>}
                 {usersError && <p style={{ color: 'red' }}>Error: {usersError}</p>}
                 {!usersLoading && !usersError && (
-                  <table style={{ width: '100%', marginTop: '20px', borderCollapse: 'collapse' }}>
-                    <thead>
-                      <tr>
-                        <th style={{ border: '1px solid #ddd', padding: '8px' }}>Email</th>
-                        <th style={{ border: '1px solid #ddd', padding: '8px' }}>Role</th>
-                        <th style={{ border: '1px solid #ddd', padding: '8px' }}>Must Change Password</th>
-                        <th style={{ border: '1px solid #ddd', padding: '8px' }}>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {users.length === 0 ? (
-                        <tr><td colSpan={4} style={{ padding: '8px', textAlign: 'center' }}>No users</td></tr>
-                      ) : (
-                        users.map((user: any) => (
-                          <tr key={user.id}>
-                            <td style={{ border: '1px solid #ddd', padding: '8px' }}>{user.email}</td>
-                            <td style={{ border: '1px solid #ddd', padding: '8px' }}>
-                              {editingUser === user.id ? (
-                                <select
-                                  value={editUserRole}
-                                  onChange={(e) => setEditUserRole(e.target.value)}
-                                  className="input"
-                                  style={{ width: '100px' }}
-                                >
-                                  <option value="user">User</option>
-                                  <option value="admin">Admin</option>
-                                </select>
-                              ) : (
-                                user.role
-                              )}
-                            </td>
-                            <td style={{ border: '1px solid #ddd', padding: '8px' }}>
-                              {editingUser === user.id ? (
-                                <input
-                                  type="checkbox"
-                                  checked={editUserMustChangePass}
-                                  onChange={(e) => setEditUserMustChangePass(e.target.checked)}
-                                />
-                              ) : (
-                                user.must_change_password ? 'Yes' : 'No'
-                              )}
-                            </td>
-                            <td style={{ border: '1px solid #ddd', padding: '8px' }}>
-                              {editingUser === user.id ? (
-                                <>
-                                  <button
-                                    onClick={() => handleUpdateUser(user.id)}
-                                    className="button"
-                                    style={{ fontSize: '12px', marginRight: '5px' }}
+                  <div className="table-wrapper" style={{ marginTop: '1rem' }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Email</th>
+                          <th>Role</th>
+                          <th>Must Change</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {users.length === 0 ? (
+                          <tr><td colSpan={4} style={{ textAlign: 'center' }}>No users</td></tr>
+                        ) : (
+                          users.map((user: any) => (
+                            <tr key={user.id}>
+                              <td className="table-cell-truncate">{user.email}</td>
+                              <td>
+                                {editingUser === user.id ? (
+                                  <select
+                                    value={editUserRole}
+                                    onChange={(e) => setEditUserRole(e.target.value)}
+                                    className="input"
                                   >
-                                    Save
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setEditingUser(null)
-                                      setEditUserRole('user')
-                                      setEditUserMustChangePass(false)
-                                    }}
-                                    className="button"
-                                    style={{ fontSize: '12px' }}
-                                  >
-                                    Cancel
-                                  </button>
-                                </>
-                              ) : (
-                                <>
-                                  <button
-                                    onClick={() => {
-                                      setEditingUser(user.id)
-                                      setEditUserRole(user.role)
-                                      setEditUserMustChangePass(user.must_change_password)
-                                    }}
-                                    className="button"
-                                    style={{ fontSize: '12px', marginRight: '5px' }}
-                                    disabled={editingUser !== null}
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    onClick={() => handleSendPasswordReset(user.email)}
-                                    className="button"
-                                    style={{ fontSize: '12px', marginRight: '5px' }}
-                                    disabled={editingUser !== null}
-                                  >
-                                    Send Reset
-                                  </button>
-                                  <button
-                                    onClick={() => handleDeleteUser(user.id)}
-                                    className="button"
-                                    style={{ fontSize: '12px' }}
-                                    disabled={editingUser !== null}
-                                  >
-                                    Delete
-                                  </button>
-                                </>
-                              )}
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
+                                    <option value="user">User</option>
+                                    <option value="admin">Admin</option>
+                                  </select>
+                                ) : (
+                                  user.role
+                                )}
+                              </td>
+                              <td>
+                                {editingUser === user.id ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={editUserMustChangePass}
+                                    onChange={(e) => setEditUserMustChangePass(e.target.checked)}
+                                  />
+                                ) : (
+                                  user.must_change_password ? 'Yes' : 'No'
+                                )}
+                              </td>
+                              <td>
+                                <div className="table-actions">
+                                  {editingUser === user.id ? (
+                                    <>
+                                      <button
+                                        onClick={() => handleUpdateUser(user.id)}
+                                        className="button"
+                                      >
+                                        Save
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          setEditingUser(null)
+                                          setEditUserRole('user')
+                                          setEditUserMustChangePass(false)
+                                        }}
+                                        className="button ghost"
+                                      >
+                                        Cancel
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <button
+                                        onClick={() => {
+                                          setEditingUser(user.id)
+                                          setEditUserRole(user.role)
+                                          setEditUserMustChangePass(user.must_change_password)
+                                        }}
+                                        className="button ghost"
+                                        disabled={editingUser !== null}
+                                      >
+                                        Edit
+                                      </button>
+                                      <button
+                                        onClick={() => handleSendPasswordReset(user.email)}
+                                        className="button ghost"
+                                        disabled={editingUser !== null}
+                                      >
+                                        Send Reset
+                                      </button>
+                                      <button
+                                        onClick={() => handleDeleteUser(user.id)}
+                                        className="button"
+                                        disabled={editingUser !== null}
+                                      >
+                                        Delete
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </>
             )}
@@ -801,6 +810,29 @@ function AdminPanel() {
               </div>
             )}
           </section>
+        )}
+
+        {expandedItem && (
+          <div className="dialog-backdrop" onClick={() => setExpandedItem(null)}>
+            <div className="dialog" onClick={(e) => e.stopPropagation()}>
+              <h2 className="section-title">Item Details</h2>
+              <p><strong>Code:</strong> {expandedItem.code}</p>
+              <p><strong>Type:</strong> {expandedItem.kind}</p>
+              {expandedItem.short_url && (
+                <p>
+                  <strong>Short URL:</strong>{' '}
+                  <a href={toAbsoluteUrl(expandedItem.short_url)} target="_blank" rel="noreferrer" className="link">
+                    {toAbsoluteUrl(expandedItem.short_url)}
+                  </a>
+                </p>
+              )}
+              <p><strong>Value:</strong></p>
+              <pre className="value-block">{expandedItem.value}</pre>
+              <div className="actions" style={{ marginTop: '1rem' }}>
+                <button className="button" onClick={() => setExpandedItem(null)}>Close</button>
+              </div>
+            </div>
+          </div>
         )}
       </main>
       </div>
@@ -1547,6 +1579,7 @@ function ProfilePage() {
   const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null)
   const [passwordLoading, setPasswordLoading] = useState(false)
   const [passwordRequiredBanner, setPasswordRequiredBanner] = useState(false)
+  const [viewItem, setViewItem] = useState<any | null>(null)
 
   const token = localStorage.getItem('w9_token')
 
@@ -1796,82 +1829,111 @@ function ProfilePage() {
         {loading && <p>Loading items...</p>}
         {error && <p style={{ color: 'red' }}>Error: {error}</p>}
         {!loading && !error && (
-          <table style={{ width: '100%', marginTop: '20px', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th style={{ border: '1px solid #ddd', padding: '8px' }}>Type</th>
-                <th style={{ border: '1px solid #ddd', padding: '8px' }}>Short URL</th>
-                <th style={{ border: '1px solid #ddd', padding: '8px' }}>Value</th>
-                <th style={{ border: '1px solid #ddd', padding: '8px' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.length === 0 ? (
-                <tr><td colSpan={4} style={{ padding: '8px', textAlign: 'center' }}>No items yet. Create some short links!</td></tr>
-              ) : (
-                items.map((item: any) => (
-                  <tr key={`${item.code}:${item.kind}`}>
-                    <td style={{ border: '1px solid #ddd', padding: '8px' }}>{item.kind}</td>
-                    <td style={{ border: '1px solid #ddd', padding: '8px' }}>
-                      {editingCode === `${item.code}:${item.kind}` ? (
-                        <div>
-                          <input
-                            type="text"
-                            value={newCode}
-                            onChange={(e) => setNewCode(e.target.value)}
-                            className="input"
-                            style={{ width: '150px', marginRight: '5px' }}
-                            placeholder="new-code"
-                          />
+          <div className="table-wrapper" style={{ marginTop: '1rem' }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>Short URL</th>
+                  <th>Value</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.length === 0 ? (
+                  <tr><td colSpan={4} style={{ textAlign: 'center' }}>No items yet. Create some short links!</td></tr>
+                ) : (
+                  items.map((item: any) => (
+                    <tr key={`${item.code}:${item.kind}`}>
+                      <td>{item.kind}</td>
+                      <td>
+                        {editingCode === `${item.code}:${item.kind}` ? (
+                          <div className="table-actions">
+                            <input
+                              type="text"
+                              value={newCode}
+                              onChange={(e) => setNewCode(e.target.value)}
+                              className="input"
+                              placeholder="new-code"
+                              style={{ width: '140px' }}
+                            />
+                            <button
+                              onClick={() => handleUpdate(item.code, item.kind)}
+                              className="button"
+                            >
+                              Save
+                            </button>
+                            <button
+                              onClick={() => {
+                                setEditingCode(null)
+                                setNewCode('')
+                              }}
+                              className="button ghost"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <a href={item.short_url} target="_blank" rel="noreferrer">{item.short_url}</a>
+                        )}
+                      </td>
+                      <td className="table-cell-truncate">{item.value}</td>
+                      <td>
+                        <div className="table-actions">
                           <button
-                            onClick={() => handleUpdate(item.code, item.kind)}
-                            className="button"
-                            style={{ fontSize: '12px', marginRight: '5px' }}
+                            className="button ghost"
+                            type="button"
+                            onClick={() => setViewItem(item)}
                           >
-                            Save
+                            View
                           </button>
                           <button
                             onClick={() => {
-                              setEditingCode(null)
-                              setNewCode('')
+                              setEditingCode(`${item.code}:${item.kind}`)
+                              setNewCode(item.code)
                             }}
-                            className="button"
-                            style={{ fontSize: '12px' }}
+                            className="button ghost"
+                            disabled={editingCode !== null}
                           >
-                            Cancel
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => handleDelete(item.code, item.kind)}
+                            className="button"
+                            disabled={deletingCode === `${item.code}:${item.kind}` || editingCode !== null}
+                          >
+                            {deletingCode === `${item.code}:${item.kind}` ? 'Deleting...' : 'Delete'}
                           </button>
                         </div>
-                      ) : (
-                        <a href={item.short_url} target="_blank" rel="noreferrer">{item.short_url}</a>
-                      )}
-                    </td>
-                    <td style={{ border: '1px solid #ddd', padding: '8px', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.value}</td>
-                    <td style={{ border: '1px solid #ddd', padding: '8px' }}>
-                      <button
-                        onClick={() => {
-                          setEditingCode(`${item.code}:${item.kind}`)
-                          setNewCode(item.code)
-                        }}
-                        className="button"
-                        style={{ fontSize: '12px', marginRight: '5px' }}
-                        disabled={editingCode !== null}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => handleDelete(item.code, item.kind)}
-                        className="button"
-                        style={{ fontSize: '12px' }}
-                        disabled={deletingCode === `${item.code}:${item.kind}` || editingCode !== null}
-                      >
-                        {deletingCode === `${item.code}:${item.kind}` ? 'Deleting...' : 'Delete'}
-                      </button>
-                    </td>
-                  </tr>
-                ))
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {viewItem && (
+          <div className="dialog-backdrop" onClick={() => setViewItem(null)}>
+            <div className="dialog" onClick={(e) => e.stopPropagation()}>
+              <h2 className="section-title">Item Details</h2>
+              <p><strong>Type:</strong> {viewItem.kind}</p>
+              <p><strong>Code:</strong> {viewItem.code}</p>
+              {viewItem.short_url && (
+                <p>
+                  <strong>Short URL:</strong>{' '}
+                  <a href={toAbsoluteUrl(viewItem.short_url)} target="_blank" rel="noreferrer" className="link">
+                    {toAbsoluteUrl(viewItem.short_url)}
+                  </a>
+                </p>
               )}
-            </tbody>
-          </table>
+              <p><strong>Value:</strong></p>
+              <pre className="value-block">{viewItem.value}</pre>
+              <div className="actions" style={{ marginTop: '1rem' }}>
+                <button className="button" onClick={() => setViewItem(null)}>Close</button>
+              </div>
+            </div>
+          </div>
         )}
       </main>
       </div>
