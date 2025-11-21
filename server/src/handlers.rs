@@ -16,8 +16,10 @@ use qrcode::render::svg::Color;
 use qrcode::QrCode;
 use rusqlite::{params, Connection, Error as SqliteError, ErrorCode, OptionalExtension};
 use std::path::{Path as StdPath}; // Use StdPath to avoid conflict with axum::extract::Path
+use std::sync::Arc;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 use askama::Template;
 use w9::templates::{ImageOgTemplate, FileInfoTemplate, PdfTemplate, VideoTemplate, NotepadTemplate};
@@ -252,13 +254,16 @@ pub struct AppState {
     pub uploads_dir: String,
     pub w9_mail_api_url: String,
     pub jwt_secret: String,
-    pub email_from_address: String,
     pub password_reset_base_url: String,
+    pub verification_base_url: String,
     pub w9_mail_api_token: Option<String>,
+    pub email_sender: Arc<RwLock<Option<EmailSenderConfig>>>,
 }
 
 const PASSWORD_MIN_LEN: usize = 8;
 const PASSWORD_RESET_TOKEN_TTL_HOURS: i64 = 24;
+const EMAIL_VERIFICATION_TOKEN_TTL_HOURS: i64 = 48;
+const EMAIL_SENDER_SETTING_KEY: &str = "email_sender";
 
 #[derive(Debug, Clone)]
 struct UserRecord {
@@ -268,6 +273,16 @@ struct UserRecord {
     salt: String,
     role: String,
     must_change_password: bool,
+    is_verified: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailSenderConfig {
+    pub sender_type: Option<String>,
+    pub sender_id: Option<String>,
+    pub email: String,
+    pub display_label: Option<String>,
+    pub via_display: Option<String>,
 }
 
 fn normalize_email(raw: &str) -> Result<String, &'static str> {
@@ -289,9 +304,106 @@ fn validate_password(password: &str) -> Result<(), &'static str> {
     }
 }
 
+pub async fn verify_email_token(
+    State(state): State<AppState>,
+    Json(payload): Json<VerifyEmailRequest>,
+) -> impl IntoResponse {
+    if payload.token.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Token is required"})),
+        );
+    }
+
+    let conn = match Connection::open(&state.db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Failed to open database: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Database error"})),
+            );
+        }
+    };
+
+    let token_row = match consume_email_verification_token(&conn, &payload.token) {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid or expired token"})),
+            );
+        }
+        Err(e) => {
+            tracing::error!("Failed to read verification token: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Database error"})),
+            );
+        }
+    };
+
+    let (user_id, expires_at) = token_row;
+    if expires_at < Utc::now().timestamp() {
+        let _ = delete_email_verification_token(&conn, &payload.token);
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Token expired"})),
+        );
+    }
+
+    let Some(mut user) = fetch_user_by_id(&conn, &user_id).unwrap_or(None) else {
+        let _ = delete_email_verification_token(&conn, &payload.token);
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "User no longer exists"})),
+        );
+    };
+
+    if let Err(e) = conn.execute(
+        "UPDATE users SET is_verified = 1 WHERE id = ?1",
+        params![user.id],
+    ) {
+        tracing::error!("Failed to update verification status: {}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Failed to verify user"})),
+        );
+    }
+
+    let _ = delete_email_verification_token(&conn, &payload.token);
+    user.is_verified = true;
+
+    let token = match issue_jwt(&state, &user) {
+        Ok(token) => token,
+        Err(e) => {
+            tracing::error!("Failed to issue JWT: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to create session"})),
+            );
+        }
+    };
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "message": "Email verified. You are now signed in.",
+            "token": token,
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "role": user.role,
+                "must_change_password": user.must_change_password,
+                "is_verified": true
+            }
+        })),
+    )
+}
+
 fn fetch_user_by_email(conn: &Connection, email: &str) -> rusqlite::Result<Option<UserRecord>> {
     conn.query_row(
-        "SELECT id, email, password_hash, salt, role, COALESCE(must_change_password, 0) FROM users WHERE email = ?1",
+        "SELECT id, email, password_hash, salt, role, COALESCE(must_change_password, 0), COALESCE(is_verified, 1) FROM users WHERE email = ?1",
         params![email],
         |row| {
             Ok(UserRecord {
@@ -301,6 +413,7 @@ fn fetch_user_by_email(conn: &Connection, email: &str) -> rusqlite::Result<Optio
                 salt: row.get(3)?,
                 role: row.get(4)?,
                 must_change_password: row.get::<_, i64>(5)? != 0,
+                is_verified: row.get::<_, i64>(6)? != 0,
             })
         },
     )
@@ -309,7 +422,7 @@ fn fetch_user_by_email(conn: &Connection, email: &str) -> rusqlite::Result<Optio
 
 fn fetch_user_by_id(conn: &Connection, user_id: &str) -> rusqlite::Result<Option<UserRecord>> {
     conn.query_row(
-        "SELECT id, email, password_hash, salt, role, COALESCE(must_change_password, 0) FROM users WHERE id = ?1",
+        "SELECT id, email, password_hash, salt, role, COALESCE(must_change_password, 0), COALESCE(is_verified, 1) FROM users WHERE id = ?1",
         params![user_id],
         |row| {
             Ok(UserRecord {
@@ -319,6 +432,7 @@ fn fetch_user_by_id(conn: &Connection, user_id: &str) -> rusqlite::Result<Option
                 salt: row.get(3)?,
                 role: row.get(4)?,
                 must_change_password: row.get::<_, i64>(5)? != 0,
+                is_verified: row.get::<_, i64>(6)? != 0,
             })
         },
     )
@@ -369,6 +483,43 @@ fn mark_token_consumed(conn: &Connection, token: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+fn store_email_verification_token(
+    conn: &Connection,
+    user_id: &str,
+    token: &str,
+    expires_at: i64,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM email_verification_tokens WHERE user_id = ?1 OR expires_at <= strftime('%s','now')",
+        params![user_id],
+    )?;
+    conn.execute(
+        "INSERT INTO email_verification_tokens(token, user_id, expires_at, created_at, consumed) VALUES (?1, ?2, ?3, strftime('%s','now'), 0)",
+        params![token, user_id, expires_at],
+    )?;
+    Ok(())
+}
+
+fn consume_email_verification_token(
+    conn: &Connection,
+    token: &str,
+) -> rusqlite::Result<Option<(String, i64)>> {
+    conn.query_row(
+        "SELECT user_id, expires_at FROM email_verification_tokens WHERE token = ?1",
+        params![token],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
+}
+
+fn delete_email_verification_token(conn: &Connection, token: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM email_verification_tokens WHERE token = ?1",
+        params![token],
+    )?;
+    Ok(())
+}
+
 fn build_reset_link(base: &str, token: &str) -> String {
     let separator = if base.contains('?') { "&" } else { "?" };
     format!(
@@ -379,35 +530,136 @@ fn build_reset_link(base: &str, token: &str) -> String {
     )
 }
 
-async fn send_password_reset_email(
+fn build_verify_link(base: &str, token: &str) -> String {
+    let separator = if base.contains('?') { "&" } else { "?" };
+    format!(
+        "{}{}token={}",
+        base.trim_end_matches('/'),
+        separator,
+        urlencoding::encode(token)
+    )
+}
+
+fn get_setting(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT value FROM app_settings WHERE key = ?1",
+        params![key],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO app_settings(key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+pub fn load_email_sender(conn: &Connection) -> rusqlite::Result<Option<EmailSenderConfig>> {
+    if let Some(value) = get_setting(conn, EMAIL_SENDER_SETTING_KEY)? {
+        serde_json::from_str(&value)
+            .map(Some)
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn save_email_sender(conn: &Connection, sender: &EmailSenderConfig) -> rusqlite::Result<()> {
+    let value = serde_json::to_string(sender).map_err(|e| {
+        rusqlite::Error::ToSqlConversionFailure(Box::new(e))
+    })?;
+    set_setting(conn, EMAIL_SENDER_SETTING_KEY, &value)
+}
+
+async fn current_email_sender(state: &AppState) -> Option<EmailSenderConfig> {
+    state.email_sender.read().await.clone()
+}
+
+fn render_transactional_email(
+    title: &str,
+    body_lines: &[String],
+    button_text: &str,
+    button_url: &str,
+) -> String {
+    let paragraphs = body_lines
+        .iter()
+        .map(|line| {
+            format!(
+                "<p style=\"margin:0 0 16px;color:#fdfdfd;font-size:15px;line-height:1.6;font-family:'Courier New',Courier,monospace;\">{}</p>",
+                html_escape::encode_text(line)
+            )
+        })
+        .collect::<String>();
+
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{title}</title>
+</head>
+<body style="background:#050505;padding:32px;font-family:'Courier New',Courier,monospace;">
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+    <tr>
+      <td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:640px;border:2px solid #fdfdfd;padding:28px;background:#000;">
+          <tr><td style="text-align:left;">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px;">
+              <div style="width:42px;height:42px;border:2px solid #fdfdfd;display:flex;align-items:center;justify-content:center;font-weight:bold;color:#fdfdfd;">W9</div>
+              <div>
+                <div style="color:#fdfdfd;font-size:18px;letter-spacing:0.1em;text-transform:uppercase;">W9 Tools</div>
+                <div style="color:#9a9a9a;font-size:12px;">Fast drops • Short links • Secure notes</div>
+              </div>
+            </div>
+            <h1 style="margin:0 0 20px;font-size:22px;letter-spacing:0.08em;text-transform:uppercase;color:#fdfdfd;">{title}</h1>
+            {paragraphs}
+            <div style="margin:32px 0;">
+              <a href="{button_url}" style="text-decoration:none;display:inline-block;border:2px solid #fdfdfd;padding:14px 28px;color:#fdfdfd;text-transform:uppercase;font-weight:bold;font-size:12px;letter-spacing:0.2em;">{button_text}</a>
+            </div>
+            <p style="margin:0 0 8px;color:#9a9a9a;font-size:12px;line-height:1.5;word-break:break-word;">If the button doesn't work, copy and paste this link:<br />{button_url}</p>
+            <hr style="border:none;border-top:2px solid #1a1a1a;margin:32px 0;" />
+            <p style="margin:0;color:#686868;font-size:11px;line-height:1.4;">Automated message from W9 Tools. Replies are not monitored.</p>
+          </td></tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"#,
+        title = html_escape::encode_text(title),
+        paragraphs = paragraphs,
+        button_text = html_escape::encode_text(button_text),
+        button_url = html_escape::encode_text(button_url),
+    )
+}
+
+async fn send_transactional_email(
     state: &AppState,
     to: &str,
-    reset_link: &str,
+    subject: &str,
+    html_body: &str,
 ) -> Result<(), String> {
     let Some(token) = state.w9_mail_api_token.as_ref() else {
-        tracing::warn!("W9_MAIL_API_TOKEN not configured; password reset email not sent");
         return Err("Email service not configured".into());
     };
-
-    let subject = "Reset your W9 Tools password";
-    let body = format!(
-        "<p>You requested to reset your password for W9 Tools.</p>\
-        <p><a href=\"{link}\">Click here to reset your password</a>.\
-        This link expires in {hours} hour(s).</p>\
-        <p>If you did not request this, you can ignore this email.</p>",
-        link = reset_link,
-        hours = PASSWORD_RESET_TOKEN_TTL_HOURS
-    );
+    let Some(sender) = current_email_sender(state).await else {
+        return Err("Default sender not configured".into());
+    };
 
     let client = reqwest::Client::new();
     let resp = client
         .post(format!("{}/api/send", state.w9_mail_api_url.trim_end_matches('/')))
         .bearer_auth(token)
         .json(&serde_json::json!({
-            "from": state.email_from_address,
+            "from": sender.email,
             "to": to,
             "subject": subject,
-            "body": body,
+            "body": html_body,
             "is_html": true
         }))
         .send()
@@ -417,7 +669,44 @@ async fn send_password_reset_email(
     if !resp.status().is_success() {
         return Err(format!("Email service responded with {}", resp.status()));
     }
+
     Ok(())
+}
+
+async fn send_password_reset_email(
+    state: &AppState,
+    to: &str,
+    reset_link: &str,
+) -> Result<(), String> {
+    let subject = "Reset your W9 Tools password";
+    let body_lines = vec![
+        format!("We received a password reset request for {}.", to),
+        format!(
+            "This link expires in {} hour(s). If you didn’t request it, you can ignore this message.",
+            PASSWORD_RESET_TOKEN_TTL_HOURS
+        ),
+    ];
+    let html = render_transactional_email(subject, &body_lines, "Reset password", reset_link);
+    send_transactional_email(state, to, subject, &html).await
+}
+
+async fn send_verification_email(
+    state: &AppState,
+    to: &str,
+    verify_link: &str,
+) -> Result<(), String> {
+    let subject = "Verify your W9 Tools account";
+    let body_lines = vec![
+        format!("Thanks for creating a W9 Tools account with {}.", to),
+        "Click the button below to verify your email and unlock uploads, short links, and secure notes."
+            .to_string(),
+        format!(
+            "The link expires in {} hour(s). If this wasn’t you, feel free to ignore this email.",
+            EMAIL_VERIFICATION_TOKEN_TTL_HOURS
+        ),
+    ];
+    let html = render_transactional_email(subject, &body_lines, "Verify account", verify_link);
+    send_transactional_email(state, to, subject, &html).await
 }
 
 fn normalize_custom_code(raw: &str) -> Result<String, &'static str> {
@@ -1519,6 +1808,13 @@ pub async fn login(State(state): State<AppState>, Json(payload): Json<LoginReque
         );
     }
 
+    if !user.is_verified {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Please verify your email before logging in"})),
+        );
+    }
+
     let token = match issue_jwt(&state, &user) {
         Ok(token) => token,
         Err(e) => {
@@ -1538,7 +1834,8 @@ pub async fn login(State(state): State<AppState>, Json(payload): Json<LoginReque
                 "id": user.id,
                 "email": user.email,
                 "role": user.role,
-                "must_change_password": user.must_change_password
+                "must_change_password": user.must_change_password,
+                "is_verified": user.is_verified
             }
         })),
     )
@@ -1590,11 +1887,10 @@ pub async fn register(State(state): State<AppState>, Json(payload): Json<Registe
     let user_id = Uuid::new_v4().to_string();
     let salt = generate_token(32);
     let password_hash = hash_with_salt(&payload.password, &salt);
-
     let created_at = Utc::now().timestamp();
     match conn.execute(
-        "INSERT INTO users(id, email, password_hash, salt, role, must_change_password, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)",
-        params![user_id, email, password_hash, salt, "user", created_at],
+        "INSERT INTO users(id, email, password_hash, salt, role, must_change_password, created_at, is_verified) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, 0)",
+        params![user_id, email.clone(), password_hash, salt, "user", created_at],
     ) {
         Ok(_) => {}
         Err(SqliteError::SqliteFailure(err, _)) if err.code == ErrorCode::ConstraintViolation => {
@@ -1612,36 +1908,25 @@ pub async fn register(State(state): State<AppState>, Json(payload): Json<Registe
         }
     }
 
-    let user = UserRecord {
-        id: user_id,
-        email,
-        password_hash,
-        salt,
-        role: "user".to_string(),
-        must_change_password: false,
-    };
+    let verify_token = generate_token(64);
+    let verify_expires = Utc::now()
+        .checked_add_signed(Duration::hours(EMAIL_VERIFICATION_TOKEN_TTL_HOURS))
+        .unwrap_or_else(|| Utc::now())
+        .timestamp();
 
-    let token = match issue_jwt(&state, &user) {
-        Ok(token) => token,
-        Err(e) => {
-            tracing::error!("Failed to issue JWT: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Failed to create session"})),
-            );
+    if let Err(e) = store_email_verification_token(&conn, &user_id, &verify_token, verify_expires) {
+        tracing::error!("Failed to store verification token: {}", e);
+    } else {
+        let verify_link = build_verify_link(&state.verification_base_url, &verify_token);
+        if let Err(e) = send_verification_email(&state, &email, &verify_link).await {
+            tracing::error!("Failed to send verification email: {}", e);
         }
-    };
+    }
 
     (
         StatusCode::CREATED,
         Json(serde_json::json!({
-            "message": "Registration successful",
-            "token": token,
-            "user": {
-                "id": user.id,
-                "email": user.email,
-                "role": user.role
-            }
+            "message": "Account created. Check your email for a verification link before logging in."
         })),
     )
 }
@@ -1783,6 +2068,54 @@ pub struct AdminSendPasswordResetRequest {
     pub email: String,
 }
 
+#[derive(Deserialize)]
+struct MailAccountInfo {
+    id: String,
+    email: String,
+    #[serde(rename = "displayName")]
+    display_name: String,
+    #[serde(rename = "isActive")]
+    is_active: bool,
+}
+
+#[derive(Deserialize)]
+struct MailAliasInfo {
+    id: String,
+    #[serde(rename = "aliasEmail")]
+    alias_email: String,
+    #[serde(rename = "displayName")]
+    display_name: Option<String>,
+    #[serde(rename = "isActive")]
+    is_active: bool,
+    #[serde(rename = "accountId")]
+    account_id: String,
+    #[serde(rename = "accountEmail")]
+    account_email: String,
+    #[serde(rename = "accountDisplayName")]
+    account_display_name: String,
+    #[serde(rename = "accountIsActive")]
+    account_is_active: bool,
+}
+
+#[derive(Serialize)]
+pub struct EmailSenderSummary {
+    pub sender_type: String,
+    pub sender_id: String,
+    pub email: String,
+    pub display_label: String,
+    pub via_display: Option<String>,
+    pub is_active: bool,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateEmailSenderRequest {
+    pub sender_type: Option<String>,
+    pub sender_id: Option<String>,
+    pub email: String,
+    pub display_label: Option<String>,
+    pub via_display: Option<String>,
+}
+
 #[derive(Serialize)]
 struct AdminUserSummary {
     id: String,
@@ -1804,6 +2137,11 @@ pub struct PasswordResetConfirmRequest {
     pub token: String,
     pub new_password: String,
     pub confirm_password: String,
+}
+
+#[derive(Deserialize)]
+pub struct VerifyEmailRequest {
+    pub token: String,
 }
 
 pub async fn user_update_item(
@@ -2099,6 +2437,199 @@ pub async fn change_password(
     }
 }
 
+pub async fn admin_list_email_senders(State(state): State<AppState>, AdminUser(_): AdminUser) -> impl IntoResponse {
+    let Some(token) = state.w9_mail_api_token.as_ref() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Email integration not configured"})),
+        );
+    };
+
+    let client = reqwest::Client::new();
+    let base = state.w9_mail_api_url.trim_end_matches('/');
+
+    let accounts_resp = client
+        .get(format!("{}/api/accounts", base))
+        .bearer_auth(token)
+        .send()
+        .await;
+    let accounts: Vec<MailAccountInfo> = match accounts_resp {
+        Ok(resp) if resp.status().is_success() => match resp.json().await {
+            Ok(data) => data,
+            Err(e) => {
+                tracing::error!("Failed to parse accounts: {}", e);
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({"error": "Failed to parse accounts"})),
+                );
+            }
+        },
+        Ok(resp) => {
+            tracing::error!("Failed to fetch accounts: {}", resp.status());
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": "Failed to load sender accounts"})),
+            );
+        }
+        Err(e) => {
+            tracing::error!("Failed to fetch accounts: {}", e);
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": "Failed to load sender accounts"})),
+            );
+        }
+    };
+
+    let aliases_resp = client
+        .get(format!("{}/api/aliases", base))
+        .bearer_auth(token)
+        .send()
+        .await;
+    let aliases: Vec<MailAliasInfo> = match aliases_resp {
+        Ok(resp) if resp.status().is_success() => match resp.json().await {
+            Ok(data) => data,
+            Err(e) => {
+                tracing::error!("Failed to parse aliases: {}", e);
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({"error": "Failed to parse aliases"})),
+                );
+            }
+        },
+        Ok(resp) => {
+            tracing::error!("Failed to fetch aliases: {}", resp.status());
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": "Failed to load sender aliases"})),
+            );
+        }
+        Err(e) => {
+            tracing::error!("Failed to fetch aliases: {}", e);
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": "Failed to load sender aliases"})),
+            );
+        }
+    };
+
+    let mut results = Vec::new();
+    for account in accounts {
+        results.push(EmailSenderSummary {
+            sender_type: "account".to_string(),
+            sender_id: account.id,
+            email: account.email.clone(),
+            display_label: format!("{} ({})", account.display_name, account.email),
+            via_display: None,
+            is_active: account.is_active,
+        });
+    }
+    for alias in aliases {
+        results.push(EmailSenderSummary {
+            sender_type: "alias".to_string(),
+            sender_id: alias.id,
+            email: alias.alias_email.clone(),
+            display_label: alias
+                .display_name
+                .clone()
+                .unwrap_or_else(|| alias.alias_email.clone()),
+            via_display: Some(format!(
+                "{} ({})",
+                alias.account_display_name, alias.account_email
+            )),
+            is_active: alias.is_active && alias.account_is_active,
+        });
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "options": results })),
+    )
+}
+
+pub async fn admin_get_email_sender(State(state): State<AppState>, AdminUser(_): AdminUser) -> impl IntoResponse {
+    let sender = state.email_sender.read().await.clone();
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "sender": sender })),
+    )
+}
+
+pub async fn admin_set_email_sender(
+    State(state): State<AppState>,
+    AdminUser(_): AdminUser,
+    Json(payload): Json<UpdateEmailSenderRequest>,
+) -> impl IntoResponse {
+    if payload.email.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Sender email is required"})),
+        );
+    }
+
+    let normalized_type = payload
+        .sender_type
+        .as_ref()
+        .map(|t| t.trim().to_ascii_lowercase());
+    if normalized_type
+        .as_ref()
+        .map(|_| payload.sender_id.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true))
+        .unwrap_or(false)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "sender_id is required when sender_type is provided"})),
+        );
+    }
+    if let Some(ref ty) = normalized_type {
+        if ty != "account" && ty != "alias" {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "sender_type must be 'account', 'alias', or omitted"})),
+            );
+        }
+    }
+
+    let config = EmailSenderConfig {
+        sender_type: normalized_type,
+        sender_id: payload.sender_id,
+        email: payload.email.trim().to_string(),
+        display_label: payload.display_label,
+        via_display: payload.via_display,
+    };
+
+    let conn = match Connection::open(&state.db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Failed to open database: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Database error"})),
+            );
+        }
+    };
+
+    if let Err(e) = save_email_sender(&conn, &config) {
+        tracing::error!("Failed to save sender config: {}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Failed to persist sender"})),
+        );
+    }
+
+    {
+        let mut guard = state.email_sender.write().await;
+        *guard = Some(config.clone());
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "message": "Default sender updated",
+            "sender": config
+        })),
+    )
+}
+
 pub async fn admin_list_users(State(state): State<AppState>, AdminUser(_): AdminUser) -> impl IntoResponse {
     let conn = match Connection::open(&state.db_path) {
         Ok(c) => c,
@@ -2148,7 +2679,7 @@ pub async fn admin_list_users(State(state): State<AppState>, AdminUser(_): Admin
     for user in users_iter {
         match user {
             Ok(u) => users.push(u),
-            Err(e) => {
+        Err(e) => {
                 tracing::error!("Failed to read user row: {}", e);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -2223,8 +2754,8 @@ pub async fn admin_create_user(
     let created_at = Utc::now().timestamp();
 
     match conn.execute(
-        "INSERT INTO users(id, email, password_hash, salt, role, must_change_password, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)",
+        "INSERT INTO users(id, email, password_hash, salt, role, must_change_password, created_at, is_verified) \
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, 1)",
         params![user_id, email, password_hash, salt, role, created_at],
     ) {
         Ok(_) => (

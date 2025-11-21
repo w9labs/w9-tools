@@ -2,7 +2,9 @@ use axum::routing::{get, post, patch};
 use axum::{Router, Json};
 use axum::extract::DefaultBodyLimit;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 use tower_http::services::ServeDir;
 use tower_http::cors::{CorsLayer, Any};
 use tower_http::limit::RequestBodyLimitLayer;
@@ -197,6 +199,33 @@ async fn main() -> anyhow::Result<()> {
     ensure_user_schema(&conn)?;
     ensure_default_admin(&conn)?;
 
+    let fallback_sender_email = std::env::var("EMAIL_FROM_ADDRESS")
+        .unwrap_or_else(|_| "W9 Tools <no-reply@w9.se>".to_string());
+
+    let mut sender_config = match handlers::load_email_sender(&conn) {
+        Ok(config) => config,
+        Err(e) => {
+            tracing::warn!("Failed to load stored sender config: {}", e);
+            None
+        }
+    };
+
+    if sender_config.is_none() {
+        let fallback = handlers::EmailSenderConfig {
+            sender_type: None,
+            sender_id: None,
+            email: fallback_sender_email.clone(),
+            display_label: Some("W9 Tools".to_string()),
+            via_display: None,
+        };
+        if let Err(e) = handlers::save_email_sender(&conn, &fallback) {
+            tracing::warn!("Failed to persist default sender config: {}", e);
+        }
+        sender_config = Some(fallback);
+    }
+
+    let email_sender = Arc::new(RwLock::new(sender_config));
+
     // Get uploads directory from environment or use default relative path
     let uploads_dir = std::env::var("UPLOADS_DIR")
         .unwrap_or_else(|_| "uploads".to_string());
@@ -215,12 +244,14 @@ async fn main() -> anyhow::Result<()> {
     let jwt_secret = std::env::var("JWT_SECRET")
         .unwrap_or_else(|_| "change-me-in-production".to_string());
 
-    let email_from_address = std::env::var("EMAIL_FROM_ADDRESS")
-        .unwrap_or_else(|_| "W9 Tools <no-reply@w9.se>".to_string());
     let password_reset_base_url = std::env::var("PASSWORD_RESET_BASE_URL")
         .ok()
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| format!("{}/reset-password", base_url.trim_end_matches('/')));
+    let verification_base_url = std::env::var("VERIFICATION_BASE_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| format!("{}/verify-email", base_url.trim_end_matches('/')));
     let w9_mail_api_token = std::env::var("W9_MAIL_API_TOKEN").ok().filter(|v| !v.trim().is_empty());
     
     let app_state = handlers::AppState { 
@@ -229,9 +260,10 @@ async fn main() -> anyhow::Result<()> {
         uploads_dir: uploads_dir.clone(),
         w9_mail_api_url: w9_mail_api_url.clone(),
         jwt_secret: jwt_secret.clone(),
-        email_from_address,
         password_reset_base_url,
+        verification_base_url,
         w9_mail_api_token,
+        email_sender,
     };
 
     // File serving (no state/auth required)
@@ -252,6 +284,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/auth/login", post(handlers::login))
         .route("/api/auth/register", post(handlers::register))
         .route("/api/auth/password-reset", post(handlers::request_password_reset))
+        .route("/api/auth/verify-email", post(handlers::verify_email_token))
         .route("/api/auth/change-password", post(handlers::change_password))
         // User profile endpoints
         .route("/api/user/items", get(handlers::user_items))
@@ -261,6 +294,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/admin/users", get(handlers::admin_list_users).post(handlers::admin_create_user))
         .route("/api/admin/users/:id", patch(handlers::admin_update_user).delete(handlers::admin_delete_user))
         .route("/api/admin/users/send-reset", post(handlers::admin_send_password_reset))
+        .route("/api/admin/email/senders", get(handlers::admin_list_email_senders))
+        .route("/api/admin/email/sender", get(handlers::admin_get_email_sender).put(handlers::admin_set_email_sender))
         // Short link redirects
         .route("/r/:code", get(handlers::result_handler))
         .route("/s/:code", get(handlers::short_handler))
@@ -317,7 +352,8 @@ fn ensure_user_schema(conn: &Connection) -> anyhow::Result<()> {
             salt TEXT NOT NULL,
             role TEXT NOT NULL DEFAULT 'user',
             must_change_password INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+            is_verified INTEGER NOT NULL DEFAULT 1
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email);
 
@@ -331,8 +367,31 @@ fn ensure_user_schema(conn: &Connection) -> anyhow::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user ON password_reset_tokens(user_id);
         CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_expires ON password_reset_tokens(expires_at);
+
+        CREATE TABLE IF NOT EXISTS email_verification_tokens (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+            consumed INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_user ON email_verification_tokens(user_id);
+        CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_expires ON email_verification_tokens(expires_at);
+
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
         "#,
     )?;
+
+    if let Err(e) = conn.execute("ALTER TABLE users ADD COLUMN is_verified INTEGER NOT NULL DEFAULT 1", []) {
+        if !e.to_string().contains("duplicate column name") {
+            tracing::debug!("is_verified column check: {}", e);
+        }
+    }
+
     Ok(())
 }
 
@@ -355,8 +414,8 @@ fn ensure_default_admin(conn: &Connection) -> anyhow::Result<()> {
         let password_hash = handlers::hash_with_salt(&admin_password, &salt);
         let created_at = Utc::now().timestamp();
         conn.execute(
-            "INSERT INTO users(id, email, password_hash, salt, role, must_change_password, created_at) \
-             VALUES (?1, ?2, ?3, ?4, 'admin', 1, ?5)",
+            "INSERT INTO users(id, email, password_hash, salt, role, must_change_password, created_at, is_verified) \
+             VALUES (?1, ?2, ?3, ?4, 'admin', 1, ?5, 1)",
             params![Uuid::new_v4().to_string(), admin_email, password_hash, salt, created_at],
         )?;
         tracing::info!(

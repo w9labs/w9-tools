@@ -28,12 +28,30 @@ type NotepadResult = {
   error: string
 }
 
+type EmailSenderOption = {
+  sender_type: string
+  sender_id: string
+  email: string
+  display_label: string
+  via_display?: string
+  is_active: boolean
+}
+
+type EmailSenderConfig = {
+  sender_type?: string
+  sender_id?: string
+  email: string
+  display_label?: string
+  via_display?: string
+} | null
+
 // Simple router
 function useRoute() {
   const path = window.location.pathname
   if (path.startsWith('/admin')) return 'admin'
   if (path === '/login') return 'login'
   if (path === '/register') return 'register'
+  if (path === '/verify' || path === '/verify-email') return 'verify'
   if (path === '/profile') return 'profile'
   if (path === '/short' || path.startsWith('/short/')) return 'shorts'
   if (path === '/note' || path.startsWith('/note')) return 'note'
@@ -61,22 +79,34 @@ function Header() {
   
   return (
     <header className="header">
+      <div className="brand">
+        <div>
+          <h1>W9 TOOLS</h1>
+          <span>Fast drops • Short links • Secure notes</span>
+        </div>
+        <div className="pill" style={{ borderColor: token ? '#00ffd0' : undefined, color: token ? '#00ffd0' : undefined }}>
+          {token ? 'SIGNED IN' : 'GUEST'}
+        </div>
+      </div>
       <nav className="nav">
-        <a href="/" className={path === '/' ? 'nav-link active' : 'nav-link'}>Home</a>
-        <a href="/short" className={path.startsWith('/short') ? 'nav-link active' : 'nav-link'}>W9 Short Links</a>
-        <a href="/note" className={path.startsWith('/note') ? 'nav-link active' : 'nav-link'}>W9 Notepad</a>
-        <a href="/convert" className={path.startsWith('/convert') ? 'nav-link active' : 'nav-link'}>W9 Converter</a>
-        {token ? (
-          <>
-            <a href="/profile" className={path === '/profile' ? 'nav-link active' : 'nav-link'}>Profile</a>
-            <button onClick={handleLogout} className="button" style={{ marginLeft: 'auto' }}>Logout</button>
-          </>
-        ) : (
-          <>
-            <a href="/login" className={path === '/login' ? 'nav-link active' : 'nav-link'}>Login</a>
-            <a href="/register" className={path === '/register' ? 'nav-link active' : 'nav-link'}>Register</a>
-          </>
-        )}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+          <a href="/" className={path === '/' ? 'nav-link active' : 'nav-link'}>Home</a>
+          <a href="/short" className={path.startsWith('/short') ? 'nav-link active' : 'nav-link'}>Short Links</a>
+          <a href="/note" className={path.startsWith('/note') ? 'nav-link active' : 'nav-link'}>Notepad</a>
+          <a href="/convert" className={path.startsWith('/convert') ? 'nav-link active' : 'nav-link'}>Converter</a>
+          <a href="/profile" className={path === '/profile' ? 'nav-link active' : 'nav-link'}>Profile</a>
+          <a href="/admin" className={path.startsWith('/admin') ? 'nav-link active' : 'nav-link'}>Admin</a>
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          {token ? (
+            <button onClick={handleLogout} className="button secondary">Logout</button>
+          ) : (
+            <>
+              <a href="/login" className={path === '/login' ? 'nav-link active' : 'nav-link'}>Login</a>
+              <a href="/register" className={path === '/register' ? 'nav-link active' : 'nav-link'}>Register</a>
+            </>
+          )}
+        </div>
       </nav>
     </header>
   )
@@ -102,6 +132,10 @@ function AdminPanel() {
   const [editingUser, setEditingUser] = useState<string | null>(null)
   const [editUserRole, setEditUserRole] = useState('user')
   const [editUserMustChangePass, setEditUserMustChangePass] = useState(false)
+  const [senderOptions, setSenderOptions] = useState<EmailSenderOption[]>([])
+  const [currentSender, setCurrentSender] = useState<EmailSenderConfig>(null)
+  const [senderLoading, setSenderLoading] = useState(false)
+  const [senderError, setSenderError] = useState<string | null>(null)
   
   const [token, setToken] = useState<string | null>(localStorage.getItem('w9_token'))
 
@@ -197,6 +231,12 @@ function AdminPanel() {
   useEffect(() => {
     if (adminSection === 'users' && token) {
       fetchUsers()
+    }
+  }, [adminSection, token])
+
+  useEffect(() => {
+    if (adminSection === 'email' && token) {
+      fetchSenderSettings()
     }
   }, [adminSection, token])
 
@@ -322,106 +362,120 @@ function AdminPanel() {
     }
   }
 
+  const fetchSenderSettings = async () => {
+    if (!token) return
+    setSenderLoading(true)
+    setSenderError(null)
+    try {
+      const [optionsResp, currentResp] = await Promise.all([
+        fetch(joinUrl(API_BASE, '/api/admin/email/senders'), {
+          headers: { 'Authorization': `Bearer ${token}` }
+        }),
+        fetch(joinUrl(API_BASE, '/api/admin/email/sender'), {
+          headers: { 'Authorization': `Bearer ${token}` }
+        })
+      ])
+
+      if (optionsResp.ok) {
+        const data = await optionsResp.json()
+        setSenderOptions(Array.isArray(data.options) ? data.options : [])
+      } else {
+        const data = await optionsResp.json().catch(() => ({}))
+        throw new Error(data.error || 'Failed to load sender options')
+      }
+
+      if (currentResp.ok) {
+        const data = await currentResp.json()
+        setCurrentSender(data.sender || null)
+      } else {
+        setCurrentSender(null)
+      }
+    } catch (err: any) {
+      setSenderError(err?.message || 'Failed to load sender configuration')
+    } finally {
+      setSenderLoading(false)
+    }
+  }
+
+  const handleSelectSender = async (option: EmailSenderOption) => {
+    if (!token) return
+    setSenderLoading(true)
+    setSenderError(null)
+    try {
+      const resp = await fetch(joinUrl(API_BASE, '/api/admin/email/sender'), {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          sender_type: option.sender_type,
+          sender_id: option.sender_id,
+          email: option.email,
+          display_label: option.display_label,
+          via_display: option.via_display
+        })
+      })
+      const data = await resp.json()
+      if (!resp.ok) {
+        throw new Error(data.error || 'Failed to update sender')
+      }
+      setCurrentSender(data.sender || null)
+    } catch (err: any) {
+      setSenderError(err?.message || 'Failed to update sender')
+    } finally {
+      setSenderLoading(false)
+    }
+  }
+
   const filteredItems = activeTab === 'all' 
     ? items 
     : items.filter((item: any) => item.kind === activeTab)
 
+  const adminTabs = [
+    { id: 'items', label: 'Items' },
+    { id: 'users', label: 'Users' },
+    { id: 'email', label: 'Email Sender' },
+  ] as const
+
+  const itemFilters = [
+    { id: 'all', label: 'All' },
+    { id: 'url', label: 'URLs' },
+    { id: 'file', label: 'Files' },
+    { id: 'notepad', label: 'Notepads' },
+  ] as const
+
   return (
     <div className="app">
-      <main className="container">
+      <Header />
+      <div className="page-shell">
+      <main className="panel">
         <h1>Admin Panel</h1>
-        <button onClick={handleLogout} className="button">Logout</button>
         
-        <div style={{ marginTop: '20px', borderBottom: '1px solid #ddd' }}>
-          <button
-            onClick={() => setAdminSection('items')}
-            style={{
-              padding: '10px 20px',
-              marginRight: '10px',
-              border: 'none',
-              background: adminSection === 'items' ? '#007bff' : 'transparent',
-              color: adminSection === 'items' ? 'white' : '#007bff',
-              cursor: 'pointer',
-              borderBottom: adminSection === 'items' ? '2px solid #007bff' : '2px solid transparent'
-            }}
-          >
-            Items
-          </button>
-          <button
-            onClick={() => setAdminSection('users')}
-            style={{
-              padding: '10px 20px',
-              marginRight: '10px',
-              border: 'none',
-              background: adminSection === 'users' ? '#007bff' : 'transparent',
-              color: adminSection === 'users' ? 'white' : '#007bff',
-              cursor: 'pointer',
-              borderBottom: adminSection === 'users' ? '2px solid #007bff' : '2px solid transparent'
-            }}
-          >
-            Users
-          </button>
+        <div className="admin-tabs">
+          {adminTabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setAdminSection(tab.id)}
+              className={`admin-tab ${adminSection === tab.id ? 'active' : ''}`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
         {adminSection === 'items' && (
           <>
-        <div style={{ marginTop: '20px', borderBottom: '1px solid #ddd' }}>
-          <button
-            onClick={() => setActiveTab('all')}
-            style={{
-              padding: '10px 20px',
-              marginRight: '10px',
-              border: 'none',
-              background: activeTab === 'all' ? '#007bff' : 'transparent',
-              color: activeTab === 'all' ? 'white' : '#007bff',
-              cursor: 'pointer',
-              borderBottom: activeTab === 'all' ? '2px solid #007bff' : '2px solid transparent'
-            }}
-          >
-            All
-          </button>
-          <button
-            onClick={() => setActiveTab('url')}
-            style={{
-              padding: '10px 20px',
-              marginRight: '10px',
-              border: 'none',
-              background: activeTab === 'url' ? '#007bff' : 'transparent',
-              color: activeTab === 'url' ? 'white' : '#007bff',
-              cursor: 'pointer',
-              borderBottom: activeTab === 'url' ? '2px solid #007bff' : '2px solid transparent'
-            }}
-          >
-            URLs
-          </button>
-          <button
-            onClick={() => setActiveTab('file')}
-            style={{
-              padding: '10px 20px',
-              marginRight: '10px',
-              border: 'none',
-              background: activeTab === 'file' ? '#007bff' : 'transparent',
-              color: activeTab === 'file' ? 'white' : '#007bff',
-              cursor: 'pointer',
-              borderBottom: activeTab === 'file' ? '2px solid #007bff' : '2px solid transparent'
-            }}
-          >
-            Files
-          </button>
-          <button
-            onClick={() => setActiveTab('notepad')}
-            style={{
-              padding: '10px 20px',
-              marginRight: '10px',
-              border: 'none',
-              background: activeTab === 'notepad' ? '#007bff' : 'transparent',
-              color: activeTab === 'notepad' ? 'white' : '#007bff',
-              cursor: 'pointer',
-              borderBottom: activeTab === 'notepad' ? '2px solid #007bff' : '2px solid transparent'
-            }}
-          >
-            Notepads
-          </button>
+        <div className="admin-tabs" style={{ marginTop: '1rem' }}>
+          {itemFilters.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`admin-tab ${activeTab === tab.id ? 'active' : ''}`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
         {loading && <p>Loading items...</p>}
@@ -628,7 +682,64 @@ function AdminPanel() {
             )}
           </>
         )}
+
+        {adminSection === 'email' && (
+          <section style={{ marginTop: '1.5rem' }}>
+            <p className="subtitle">Choose which w9.mail account or alias should send verification + reset emails for w9-tools.</p>
+            <div className="banner" style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: '0.85rem', letterSpacing: '0.1em', textTransform: 'uppercase' }}>Current sender</div>
+                {currentSender ? (
+                  <strong>{currentSender.display_label || currentSender.email}</strong>
+                ) : (
+                  <span>No sender configured</span>
+                )}
+              </div>
+              <button className="button secondary" onClick={fetchSenderSettings} disabled={senderLoading}>
+                {senderLoading ? 'Refreshing...' : 'Refresh'}
+              </button>
+            </div>
+            {senderError && <p style={{ color: '#ff6b6b' }}>{senderError}</p>}
+            {senderLoading && senderOptions.length === 0 && <p>Loading sender options...</p>}
+            {!senderLoading && senderOptions.length === 0 && (
+              <p style={{ color: 'var(--muted)' }}>No senders available from w9.mail. Add accounts or aliases there first.</p>
+            )}
+            {senderOptions.length > 0 && (
+              <div className="sender-grid">
+                {senderOptions.map((option) => {
+                  const isCurrent = currentSender && currentSender.email === option.email
+                  return (
+                    <div key={`${option.sender_type}:${option.sender_id}`} className={`sender-card ${!option.is_active ? 'inactive' : ''}`}>
+                      <div className={`tag ${option.sender_type}`}>
+                        {option.sender_type === 'alias' ? 'Alias' : 'Account'}
+                        {isCurrent && <span style={{ color: '#00ffd0' }}>• Current</span>}
+                      </div>
+                      <h4>{option.display_label}</h4>
+                      <div className="sender-meta">{option.email}</div>
+                      {option.via_display && (
+                        <div className="sender-meta">via {option.via_display}</div>
+                      )}
+                      {!option.is_active && (
+                        <div className="hint">Inactive sender in w9.mail</div>
+                      )}
+                      <div className="sender-actions">
+                        <button
+                          className="button"
+                          disabled={isCurrent || senderLoading || !option.is_active}
+                          onClick={() => handleSelectSender(option)}
+                        >
+                          {isCurrent ? 'Selected' : 'Use Sender'}
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+        )}
       </main>
+      </div>
     </div>
   )
 }
@@ -637,7 +748,8 @@ function Homepage() {
   return (
     <div className="app">
       <Header />
-      <main className="container">
+      <div className="page-shell">
+      <main className="panel">
         <h1>W9 Tools — Share Fast</h1>
         <p className="subtitle">
           Lightweight toolkit for instant short links, markdown notepads, and upcoming converters. Open-source, privacy-conscious, always ready.
@@ -648,6 +760,7 @@ function Homepage() {
           </a>
         </div>
       </main>
+      </div>
     </div>
   )
 }
@@ -770,7 +883,8 @@ function ShortsPage() {
   return (
     <div className="app">
       <Header />
-      <main className="container">
+      <div className="page-shell">
+      <main className="panel">
         <h1>W9 Short Links</h1>
         <p className="subtitle">Share a link or upload a file · get a short URL with QR code</p>
 
@@ -904,6 +1018,7 @@ function ShortsPage() {
           </div>
         )}
       </main>
+      </div>
     </div>
   )
 }
@@ -968,7 +1083,8 @@ function NotepadPage() {
   return (
     <div className="app">
       <Header />
-      <main className="container">
+      <div className="page-shell">
+      <main className="panel">
         <h1>W9 Notepad</h1>
         <p className="subtitle">Quickly paste something and create a short link</p>
 
@@ -1033,6 +1149,7 @@ function NotepadPage() {
           </div>
         )}
       </main>
+      </div>
     </div>
   )
 }
@@ -1041,10 +1158,12 @@ function ConverterPage() {
   return (
     <div className="app">
       <Header />
-      <main className="container">
-        <h1>W9 Converter</h1>
-        <p className="subtitle">In development</p>
-      </main>
+      <div className="page-shell">
+        <main className="panel">
+          <h1>W9 Converter</h1>
+          <p className="subtitle">In development</p>
+        </main>
+      </div>
     </div>
   )
 }
@@ -1113,7 +1232,8 @@ function LoginPage() {
   return (
     <div className="app">
       <Header />
-      <main className="container">
+      <div className="page-shell">
+      <main className="panel">
         <h1>Login</h1>
         {!showReset ? (
           <form onSubmit={handleLogin} className="form" style={{ maxWidth: '400px' }}>
@@ -1175,6 +1295,7 @@ function LoginPage() {
           </form>
         )}
       </main>
+      </div>
     </div>
   )
 }
@@ -1213,7 +1334,8 @@ function RegisterPage() {
   return (
     <div className="app">
       <Header />
-      <main className="container">
+      <div className="page-shell">
+      <main className="panel">
         <h1>Register</h1>
         <form onSubmit={handleRegister} className="form" style={{ maxWidth: '400px' }}>
           <label className="label">
@@ -1247,6 +1369,71 @@ function RegisterPage() {
           </p>
         </form>
       </main>
+      </div>
+    </div>
+  )
+}
+
+function VerifyPage() {
+  const [status, setStatus] = useState<'pending' | 'success' | 'error'>('pending')
+  const [message, setMessage] = useState('Verifying your email...')
+
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get('token')
+    if (!token) {
+      setStatus('error')
+      setMessage('Missing verification token.')
+      return
+    }
+
+    let mounted = true
+    async function verify() {
+      try {
+        const resp = await fetch(joinUrl(API_BASE, '/api/auth/verify-email'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token })
+        })
+        const data = await resp.json()
+        if (!mounted) return
+        if (resp.ok && data.token) {
+          localStorage.setItem('w9_token', data.token)
+          setStatus('success')
+          setMessage('Email verified! Redirecting to your dashboard...')
+          setTimeout(() => {
+            window.location.href = '/profile'
+          }, 1500)
+        } else {
+          setStatus('error')
+          setMessage(data.error || 'Verification failed.')
+        }
+      } catch (err: any) {
+        if (!mounted) return
+        setStatus('error')
+        setMessage(err?.message || 'Verification failed.')
+      }
+    }
+
+    verify()
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  return (
+    <div className="app">
+      <Header />
+      <div className="page-shell">
+        <main className="panel" style={{ maxWidth: '480px' }}>
+          <h1>Email Verification</h1>
+          <p className="subtitle">{message}</p>
+          {status === 'error' && (
+            <a href="/login" className="button" style={{ marginTop: '1rem', display: 'inline-block' }}>
+              Back to login
+            </a>
+          )}
+        </main>
+      </div>
     </div>
   )
 }
@@ -1416,7 +1603,8 @@ function ProfilePage() {
   return (
     <div className="app">
       <Header />
-      <main className="container">
+      <div className="page-shell">
+      <main className="panel">
         <h1>My Profile</h1>
         <p className="subtitle">Manage your short links</p>
         
@@ -1553,6 +1741,7 @@ function ProfilePage() {
           </table>
         )}
       </main>
+      </div>
     </div>
   )
 }
@@ -1568,6 +1757,9 @@ export default function App() {
   }
   if (route === 'register') {
     return <RegisterPage />
+  }
+  if (route === 'verify') {
+    return <VerifyPage />
   }
   if (route === 'profile') {
     return <ProfilePage />
