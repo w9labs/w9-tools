@@ -893,6 +893,18 @@ function ShortsPage() {
     setCustomCode(cleaned)
   }
 
+  function resetAll() {
+    setUrlInput('')
+    setFileInput(null)
+    setImagePreview(null)
+    setFileInfo(null)
+    setCustomCode('')
+    setGenerateQr(false)
+    setResult(null)
+    setError(null)
+    if (fileRef.current) fileRef.current.value = ''
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     setIsLoading(true)
