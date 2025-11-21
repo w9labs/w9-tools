@@ -812,19 +812,25 @@ function Homepage() {
   return (
     <div className="app">
       <Header />
-      <div className="page-shell">
-      <main className="panel">
-        <h1>W9 Tools — Share Fast</h1>
-        <p className="subtitle">
-          Lightweight toolkit for instant short links, markdown notepads, and upcoming converters. Open-source, privacy-conscious, always ready.
-        </p>
-        <div style={{ marginTop: '2rem' }}>
-          <a href="https://github.com/ShayNeeo/w9-tools" target="_blank" rel="noreferrer" className="button" style={{ display: 'inline-block' }}>
-            View on GitHub
-          </a>
-        </div>
+      <main className="page">
+        <section className="box">
+          <h1>W9 Tools · Share Fast</h1>
+          <p className="subtitle">
+            Single-binary console for short links, secure uploads, and markdown notes. Always-on, SQLite-backed, ready for terminals and touch screens alike.
+          </p>
+          <ul className="list">
+            <li>Drop files or URLs — get short codes + QR instantly</li>
+            <li>Markdown notepad with permalinks at `/n/:code`</li>
+            <li>Admin rail for items, users, and sender routing</li>
+          </ul>
+          <div className="actions">
+            <a href="/short" className="button">Launch Shortener</a>
+            <a href="https://github.com/ShayNeeo/w9-tools" target="_blank" rel="noreferrer" className="button ghost">
+              View on GitHub
+            </a>
+          </div>
+        </section>
       </main>
-      </div>
     </div>
   )
 }
@@ -947,142 +953,149 @@ function ShortsPage() {
   return (
     <div className="app">
       <Header />
-      <div className="page-shell">
-      <main className="panel">
-        <h1>W9 Short Links</h1>
-        <p className="subtitle">Share a link or upload a file · get a short URL with QR code</p>
+      <main className="page">
+        <section className="box">
+          <h1>W9 Short Links</h1>
+          <p className="subtitle">Drop a file or paste a URL · get a short code & QR in seconds.</p>
 
-        <form onSubmit={handleSubmit} className="form">
-          <div
-            className={`dropzone ${dragOver ? 'dragover' : ''}`}
-            onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDragOver(false);
-              const f = e.dataTransfer.files?.[0]
-              if (f) handleFileChange(f)
-            }}
-            onPaste={(e) => {
-              const items = e.clipboardData?.items
-              if (!items) return
-              for (let i = 0; i < items.length; i++) {
-                const it = items[i]
-                if (it.kind === 'file') {
-                  const f = it.getAsFile()
-                  if (f) { handleFileChange(f); break }
+          <form onSubmit={handleSubmit} className="form">
+            <div
+              className={`dropzone ${dragOver ? 'dragover' : ''}`}
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault()
+                setDragOver(false)
+                const f = e.dataTransfer.files?.[0]
+                if (f) handleFileChange(f)
+              }}
+              onPaste={(e) => {
+                const items = e.clipboardData?.items
+                if (!items) return
+                for (let i = 0; i < items.length; i++) {
+                  const it = items[i]
+                  if (it.kind === 'file') {
+                    const f = it.getAsFile()
+                    if (f) { handleFileChange(f); break }
+                  }
+                  if (it.kind === 'string') {
+                    it.getAsString((text) => {
+                      if (/^https?:\/\//i.test(text.trim())) handleUrlChange(text.trim())
+                    })
+                  }
                 }
-                if (it.kind === 'string') {
-                  it.getAsString((text) => {
-                    if (/^https?:\/\//i.test(text.trim())) handleUrlChange(text.trim())
-                  })
-                }
-              }
-            }}
-          >
-            <div>Drop a file here, or paste a file or URL</div>
-          </div>
+              }}
+            >
+              <div>Drop / paste files or URLs here (1 GiB max)</div>
+            </div>
 
-          <label className="label">
-            URL
-            <input
-              type="text"
-              placeholder="https://example.com"
-              value={urlInput}
-              onChange={(e) => handleUrlChange(e.target.value)}
-              className="input"
-            />
-          </label>
-
-          <div className="or">or</div>
-
-          <label className="label">
-            File
-            <input
-              ref={fileRef}
-              type="file"
-              onChange={(e) => handleFileChange(e.target.files?.[0] || null)}
-              className="input"
-            />
-          </label>
-
-          <label className="label">
-            Custom short code (optional)
-            <div className="custom-code-row">
-              <span className="code-prefix">/s/</span>
+            <label className="label">
+              URL
               <input
                 type="text"
-                value={customCode}
-                onChange={(e) => handleCustomCodeChange(e.target.value)}
+                placeholder="https://example.com"
+                value={urlInput}
+                onChange={(e) => handleUrlChange(e.target.value)}
                 className="input"
-                placeholder="my-link"
-                maxLength={32}
               />
-            </div>
-            <span className="hint">Letters, numbers, '-' and '_'. Minimum 3 characters.</span>
-          </label>
+            </label>
 
-          {imagePreview && (
-            <div className="preview">
-              <img src={imagePreview} alt="preview" />
-            </div>
-          )}
-          {!imagePreview && fileInfo && (
-            <div className="file-preview">
-              <div><strong>Name:</strong> {fileInfo.name}</div>
-              <div><strong>Type:</strong> {fileInfo.type || 'unknown'}</div>
-              <div><strong>Size:</strong> {fileInfo.sizeKB} KB</div>
-            </div>
-          )}
+            <label className="label">
+              File
+              <input
+                ref={fileRef}
+                type="file"
+                onChange={(e) => handleFileChange(e.target.files?.[0] || null)}
+                className="input"
+              />
+            </label>
 
-          <label className="checkbox">
-            <input
-              type="checkbox"
-              checked={generateQr}
-              onChange={(e) => setGenerateQr(e.target.checked)}
-            />
-            Generate QR Code
-          </label>
+            <label className="label">
+              Custom short code (optional)
+              <div className="custom-code-row">
+                <span className="code-prefix">w9.se/</span>
+                <input
+                  type="text"
+                  value={customCode}
+                  onChange={(e) => handleCustomCodeChange(e.target.value)}
+                  className="input"
+                  placeholder="my-link"
+                  maxLength={32}
+                />
+              </div>
+              <span className="hint">Letters, numbers, '-' and '_'. Minimum 3 characters.</span>
+            </label>
 
-          <button type="submit" className="button" disabled={isLoading}>
-            {isLoading ? 'Submitting…' : 'Create'}
-          </button>
-        </form>
-
-        {isLoading && <div className="status">Submitting…</div>}
-        {error && <div className="error">{error}</div>}
-        {result && (
-          <div className="result">
-            <div className="row">
-              <span className="label-inline">Short URL</span>
-              <a href={toAbsoluteUrl(result.short_url)} className="link" target="_blank" rel="noreferrer">
-                {toAbsoluteUrl(result.short_url)}
-              </a>
-              <button
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(toAbsoluteUrl(result.short_url))
-                    setCopySuccess(true)
-                    setTimeout(() => setCopySuccess(false), 2000)
-                  } catch (err) {
-                    console.error('Copy failed:', err)
-                  }
-                }}
-                className="button"
-                style={{ marginLeft: '10px', fontSize: '14px', padding: '5px 10px' }}
-              >
-                {copySuccess ? '✓ Copied' : 'Copy'}
-              </button>
-            </div>
-            {result.qr_code_data && (
-              <div className="qr">
-                <img src={result.qr_code_data} alt="QR code" />
+            {imagePreview && (
+              <div className="preview">
+                <img src={imagePreview} alt="preview" />
               </div>
             )}
-          </div>
+            {!imagePreview && fileInfo && (
+              <div className="status">
+                <div>Name: {fileInfo.name}</div>
+                <div>Type: {fileInfo.type || 'unknown'}</div>
+                <div>Size: {fileInfo.sizeKB} KB</div>
+              </div>
+            )}
+
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={generateQr}
+                onChange={(e) => setGenerateQr(e.target.checked)}
+              />
+              Generate QR Code
+            </label>
+
+            <div className="actions">
+              <button type="submit" className="button" disabled={isLoading}>
+                {isLoading ? 'Submitting…' : 'Create'}
+              </button>
+              <button type="button" className="button ghost" onClick={resetAll}>
+                Reset
+              </button>
+            </div>
+          </form>
+        </section>
+
+        {(isLoading || error || result) && (
+          <section className="box">
+            <h2 className="section-title">Output</h2>
+            {isLoading && <div className="status">Submitting…</div>}
+            {error && <div className="status error">{error}</div>}
+            {result && (
+              <div className="status">
+                <div className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
+                  <span className="label-inline">Short URL</span>
+                  <a href={toAbsoluteUrl(result.short_url)} className="link" target="_blank" rel="noreferrer">
+                    {toAbsoluteUrl(result.short_url)}
+                  </a>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(toAbsoluteUrl(result.short_url))
+                        setCopySuccess(true)
+                        setTimeout(() => setCopySuccess(false), 2000)
+                      } catch (err) {
+                        console.error('Copy failed:', err)
+                      }
+                    }}
+                    className="button ghost"
+                  >
+                    {copySuccess ? '✓ Copied' : 'Copy'}
+                  </button>
+                </div>
+                {result.qr_code_data && (
+                  <div className="qr">
+                    <img src={result.qr_code_data} alt="QR code" />
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
         )}
       </main>
-      </div>
     </div>
   )
 }
