@@ -146,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
         if let Err(e) = conn.execute("ALTER TABLE items ADD COLUMN user_id TEXT", []) {
             // If this fails, it might be because column already exists or other issue
             // Try to verify by attempting a query
-            match conn.query_row::<_, (), _>("SELECT user_id FROM items LIMIT 1", [], |_| Ok(())) {
+            match conn.query_row::<_, (), _>("SELECT user_id FROM items LIMIT 1", params![], |_| Ok(())) {
                 Ok(_) => {
                     tracing::info!("user_id column exists (verified by query)");
                 }
@@ -167,7 +167,7 @@ async fn main() -> anyhow::Result<()> {
     
     // Final safety check: verify user_id column exists by attempting a query
     {
-        match conn.query_row::<_, (), _>("SELECT user_id FROM items LIMIT 1", [], |_| Ok(())) {
+        match conn.query_row::<_, (), _>("SELECT user_id FROM items LIMIT 1", params![], |_| Ok(())) {
             Ok(_) => {
                 tracing::info!("user_id column verified to exist");
                 // Ensure index exists
