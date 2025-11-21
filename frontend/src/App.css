@@ -315,6 +315,46 @@ table td {
   letter-spacing: 0.08em;
 }
 
+.site-footer {
+  border: 2px solid var(--border);
+  padding: 1rem;
+  width: 100%;
+  max-width: 720px;
+  text-transform: uppercase;
+}
+
+.footer-columns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.footer-title {
+  letter-spacing: 0.18em;
+  font-size: 0.85rem;
+  margin-bottom: 0.35rem;
+}
+
+.footer-links {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.footer-links a {
+  text-decoration: none;
+}
+
+.footer-copy {
+  text-transform: none;
+  letter-spacing: 0.06em;
+  max-width: 360px;
+}
+
 .list {
   list-style: none;
   padding: 0;

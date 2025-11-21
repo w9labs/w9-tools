@@ -1320,6 +1320,7 @@ function ConverterPage() {
           <p className="subtitle">In development</p>
         </main>
       </div>
+      <Footer />
     </div>
   )
 }
@@ -1457,6 +1458,7 @@ function LoginPage() {
         )}
       </main>
       </div>
+      <Footer />
     </div>
   )
 }
@@ -1531,6 +1533,7 @@ function RegisterPage() {
         </form>
       </main>
       </div>
+      <Footer />
     </div>
   )
 }
@@ -1595,6 +1598,7 @@ function VerifyPage() {
           )}
         </main>
       </div>
+      <Footer />
     </div>
   )
 }
@@ -1972,6 +1976,7 @@ function ProfilePage() {
         )}
       </main>
       </div>
+      <Footer />
     </div>
   )
 }
