@@ -1308,7 +1308,7 @@ pub struct LoginRequest {
 pub async fn login(State(state): State<AppState>, Json(payload): Json<LoginRequest>) -> impl IntoResponse {
     let client = reqwest::Client::new();
     let url = format!("{}/api/auth/login", state.w9_mail_api_url);
-    tracing::info!("Forwarding login request to: {}", url);
+    tracing::debug!("Forwarding login request to: {}", url);
     match client
         .post(&url)
         .json(&payload)
@@ -1317,34 +1317,14 @@ pub async fn login(State(state): State<AppState>, Json(payload): Json<LoginReque
     {
         Ok(resp) => {
             let status_code = resp.status().as_u16();
-            let status = match StatusCode::from_u16(status_code) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::error!("Invalid status code {}: {}", status_code, e);
-                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Invalid response from authentication service"}))).into_response();
-                }
-            };
-            
-            match resp.text().await {
-                Ok(body) => {
-                    tracing::info!("Login response status: {}, body length: {}", status_code, body.len());
-                    match serde_json::from_str::<serde_json::Value>(&body) {
-                        Ok(json) => (status, Json(json)).into_response(),
-                        Err(e) => {
-                            tracing::error!("Failed to parse JSON response: {}, body: {}", e, body);
-                            (status, Json(serde_json::json!({"error": "Invalid response format", "message": body}))).into_response()
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to read response body: {}", e);
-                    (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to read response from authentication service"}))).into_response()
-                }
-            }
+            let body = resp.text().await.unwrap_or_default();
+            let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            tracing::debug!("Login response status: {}, body: {}", status_code, body);
+            (status, Json(serde_json::json!(serde_json::from_str::<serde_json::Value>(&body).unwrap_or(serde_json::json!({"error": "Invalid response"})))))
         }
         Err(e) => {
             tracing::error!("Failed to forward login request to {}: {}", url, e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to connect to authentication service", "details": e.to_string()}))).into_response()
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to connect to authentication service"})))
         }
     }
 }

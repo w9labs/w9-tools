@@ -202,9 +202,9 @@ async fn main() -> anyhow::Result<()> {
     }
     tracing::info!("Uploads directory: {}", uploads_dir);
 
-    // Get w9-mail API URL (should be base URL like https://9.nu, not including /api)
+    // Get w9-mail API URL (should be base URL like https://w9.nu, not including /api)
     let w9_mail_api_url = std::env::var("W9_MAIL_API_URL")
-        .unwrap_or_else(|_| "https://9.nu".to_string());
+        .unwrap_or_else(|_| "https://w9.nu".to_string());
     
     // Get JWT secret for verifying tokens from w9-mail (should match w9-mail's JWT_SECRET)
     let jwt_secret = std::env::var("JWT_SECRET")
