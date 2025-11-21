@@ -1668,7 +1668,7 @@ pub async fn request_password_reset(State(state): State<AppState>, Json(payload)
 }
 
 // Change password - forwards to w9-mail
-pub async fn change_password(State(state): State<AppState>, user: AuthUser, headers: HeaderMap, Json(payload): Json<ChangePasswordRequest>) -> impl IntoResponse {
+pub async fn change_password(State(state): State<AppState>, _user: AuthUser, headers: HeaderMap, Json(payload): Json<ChangePasswordRequest>) -> impl IntoResponse {
     if payload.new_password != payload.confirm_password {
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "New passwords do not match"}))).into_response();
     }

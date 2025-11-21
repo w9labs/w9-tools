@@ -1,4 +1,4 @@
-use axum::routing::{get, post, patch, delete};
+use axum::routing::{get, post, patch};
 use axum::{Router, Json};
 use axum::extract::DefaultBodyLimit;
 use std::net::SocketAddr;
@@ -65,7 +65,10 @@ async fn main() -> anyhow::Result<()> {
         let table_exists: bool = conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='items'",
             [],
-            |r| r.get::<_, i64>(0) > 0,
+            |r| {
+                let count: i64 = r.get(0)?;
+                Ok(count > 0)
+            },
         ).unwrap_or(false);
         
         if !table_exists {
