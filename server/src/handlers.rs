@@ -16,7 +16,6 @@ use nanoid::nanoid;
 use qrcode::render::svg::Color;
 use qrcode::QrCode;
 use rusqlite::{params, Connection, Error as SqliteError, ErrorCode};
-use serde::Deserialize;
 use std::path::{Path as StdPath}; // Use StdPath to avoid conflict with axum::extract::Path
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -1391,8 +1390,9 @@ pub async fn login(State(state): State<AppState>, Json(payload): Json<LoginReque
         .await
     {
         Ok(resp) => {
-            let status = resp.status();
+            let status_code = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
+            let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
             (status, Json(serde_json::json!(serde_json::from_str::<serde_json::Value>(&body).unwrap_or(serde_json::json!({"error": "Invalid response"})))))
         }
         Err(e) => {
@@ -1418,8 +1418,9 @@ pub async fn register(State(state): State<AppState>, Json(payload): Json<Registe
         .await
     {
         Ok(resp) => {
-            let status = resp.status();
+            let status_code = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
+            let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
             (status, Json(serde_json::json!(serde_json::from_str::<serde_json::Value>(&body).unwrap_or(serde_json::json!({"error": "Invalid response"})))))
         }
         Err(e) => {
@@ -1547,14 +1548,14 @@ pub struct UpdateItemRequest {
 }
 
 // Admin user management - forward to w9-mail
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct AdminCreateUserRequest {
     pub email: String,
     pub password: String,
     pub role: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct AdminUpdateUserRequest {
     pub role: Option<String>,
     pub must_change_password: Option<bool>,
@@ -1654,8 +1655,9 @@ pub async fn request_password_reset(State(state): State<AppState>, Json(payload)
         .await
     {
         Ok(resp) => {
-            let status = resp.status();
+            let status_code = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
+            let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
             (status, Json(serde_json::json!(serde_json::from_str::<serde_json::Value>(&body).unwrap_or(serde_json::json!({"error": "Invalid response"})))))
         }
         Err(e) => {
@@ -1694,8 +1696,9 @@ pub async fn change_password(State(state): State<AppState>, user: AuthUser, head
     
     match req.send().await {
         Ok(resp) => {
-            let status = resp.status();
+            let status_code = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
+            let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
             (status, Json(serde_json::json!(serde_json::from_str::<serde_json::Value>(&body).unwrap_or(serde_json::json!({"error": "Invalid response"})))))
         }
         Err(e) => {
@@ -1724,8 +1727,9 @@ pub async fn admin_list_users(State(state): State<AppState>, user: AuthUser, hea
     }
     match req.send().await {
         Ok(resp) => {
-            let status = resp.status();
+            let status_code = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
+            let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
             (status, Json(serde_json::json!(serde_json::from_str::<serde_json::Value>(&body).unwrap_or(serde_json::json!({"error": "Invalid response"})))))
         }
         Err(e) => {
@@ -1747,8 +1751,9 @@ pub async fn admin_create_user(State(state): State<AppState>, user: AuthUser, he
     }
     match req.send().await {
         Ok(resp) => {
-            let status = resp.status();
+            let status_code = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
+            let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
             (status, Json(serde_json::json!(serde_json::from_str::<serde_json::Value>(&body).unwrap_or(serde_json::json!({"error": "Invalid response"})))))
         }
         Err(e) => {
@@ -1770,8 +1775,9 @@ pub async fn admin_update_user(State(state): State<AppState>, user: AuthUser, he
     }
     match req.send().await {
         Ok(resp) => {
-            let status = resp.status();
+            let status_code = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
+            let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
             (status, Json(serde_json::json!(serde_json::from_str::<serde_json::Value>(&body).unwrap_or(serde_json::json!({"error": "Invalid response"})))))
         }
         Err(e) => {
@@ -1791,7 +1797,8 @@ pub async fn admin_delete_user(State(state): State<AppState>, user: AuthUser, he
     }
     match req.send().await {
         Ok(resp) => {
-            let status = resp.status();
+            let status_code = resp.status().as_u16();
+            let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
             (status, Json(serde_json::json!({"success": true})))
         }
         Err(e) => {
@@ -1813,8 +1820,9 @@ pub async fn admin_send_password_reset(State(state): State<AppState>, user: Auth
     }
     match req.send().await {
         Ok(resp) => {
-            let status = resp.status();
+            let status_code = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
+            let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
             (status, Json(serde_json::json!(serde_json::from_str::<serde_json::Value>(&body).unwrap_or(serde_json::json!({"error": "Invalid response"})))))
         }
         Err(e) => {
