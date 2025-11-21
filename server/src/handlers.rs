@@ -660,7 +660,7 @@ async fn send_transactional_email(
             "to": to,
             "subject": subject,
             "body": html_body,
-            "is_html": true
+            "isHtml": true
         }))
         .send()
         .await
