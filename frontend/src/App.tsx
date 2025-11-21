@@ -31,7 +31,6 @@ type NotepadResult = {
 // Simple router
 function useRoute() {
   const path = window.location.pathname
-  if (path === '/admin/login') return 'admin-login'
   if (path.startsWith('/admin')) return 'admin'
   if (path === '/login') return 'login'
   if (path === '/register') return 'register'
@@ -83,80 +82,6 @@ function Header() {
   )
 }
 
-function AdminLogin() {
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-
-  async function handleLogin(e: FormEvent) {
-    e.preventDefault()
-    setLoading(true)
-    setError(null)
-    try {
-      const params = new URLSearchParams()
-      params.append('username', username)
-      params.append('password', password)
-      const resp = await fetch(adminApi('/login'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: params,
-        credentials: 'include'
-      })
-      const text = await resp.text()
-      if (resp.ok) {
-        window.location.href = '/admin'
-      } else {
-        try {
-          const data = JSON.parse(text)
-          setError(data.error || `Error: ${resp.status}`)
-        } catch {
-          setError(text || `HTTP ${resp.status}`)
-        }
-      }
-    } catch (err: any) {
-      setError(err?.message || 'Login failed')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div className="app">
-      <main className="container">
-        <h1>Admin Login</h1>
-        <form onSubmit={handleLogin} className="form" style={{ maxWidth: '300px' }}>
-          <label className="label">
-            Username
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="input"
-              required
-            />
-          </label>
-          <label className="label">
-            Password
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="input"
-              required
-            />
-          </label>
-          {error && <div className="error">{error}</div>}
-          <button type="submit" className="button" disabled={loading}>
-            {loading ? 'Logging in...' : 'Login'}
-          </button>
-        </form>
-      </main>
-    </div>
-  )
-}
 
 function AdminPanel() {
   const [items, setItems] = useState<any[]>([])
@@ -180,31 +105,32 @@ function AdminPanel() {
   
   const token = localStorage.getItem('w9_token')
 
-  const handleLogout = async () => {
-    try {
-      const resp = await fetch(adminApi('/logout'), { 
-        method: 'POST', 
-        credentials: 'include' 
-      })
-      if (resp.ok) {
-        window.location.href = '/'
-      }
-    } catch (err) {
-      console.error('Logout error:', err)
-      window.location.href = '/'
+  useEffect(() => {
+    if (!token) {
+      window.location.href = '/login?redirect=/admin'
+      return
     }
+  }, [token])
+
+  const handleLogout = () => {
+    localStorage.removeItem('w9_token')
+    window.location.href = '/'
   }
 
   const handleDelete = async (code: string, kind: string) => {
+    if (!token) return
     if (!confirm(`Delete ${kind} item ${code}?`)) return
     setDeletingCode(`${code}:${kind}`)
     try {
       const resp = await fetch(adminApi(`/items/${code}/${kind}`), {
         method: 'POST',
-        credentials: 'include'
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       })
-      if (resp.status === 401) {
-        window.location.href = '/admin/login'
+      if (resp.status === 401 || resp.status === 403) {
+        localStorage.removeItem('w9_token')
+        window.location.href = '/login?redirect=/admin'
         return
       }
       if (resp.ok) {
@@ -220,12 +146,19 @@ function AdminPanel() {
   }
 
   useEffect(() => {
+    if (!token) return
+    
     const fetchItems = async () => {
       try {
-        const resp = await fetch(adminApi('/items'), { credentials: 'include' })
+        const resp = await fetch(adminApi('/items'), {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        })
         
-        if (resp.status === 401) {
-          window.location.href = '/admin/login'
+        if (resp.status === 401 || resp.status === 403) {
+          localStorage.removeItem('w9_token')
+          window.location.href = '/login?redirect=/admin'
           return
         }
         
@@ -242,7 +175,7 @@ function AdminPanel() {
       }
     }
     fetchItems()
-  }, [])
+  }, [token])
 
   useEffect(() => {
     if (adminSection === 'users' && token) {
@@ -1109,6 +1042,10 @@ function LoginPage() {
   const [resetLoading, setResetLoading] = useState(false)
   const [resetMessage, setResetMessage] = useState<string | null>(null)
 
+  // Get redirect parameter from URL
+  const urlParams = new URLSearchParams(window.location.search)
+  const redirectTo = urlParams.get('redirect') || '/profile'
+
   async function handleLogin(e: FormEvent) {
     e.preventDefault()
     setLoading(true)
@@ -1122,7 +1059,7 @@ function LoginPage() {
       const data = await resp.json()
       if (resp.ok && data.token) {
         localStorage.setItem('w9_token', data.token)
-        window.location.href = '/profile'
+        window.location.href = redirectTo
       } else {
         setError(data.error || 'Login failed')
       }
@@ -1606,9 +1543,6 @@ function ProfilePage() {
 export default function App() {
   const route = useRoute()
 
-  if (route === 'admin-login') {
-    return <AdminLogin />
-  }
   if (route === 'admin') {
     return <AdminPanel />
   }

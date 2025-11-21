@@ -186,20 +186,6 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     
-    conn.execute_batch(
-        r#"
-        CREATE TABLE IF NOT EXISTS admin (
-            id INTEGER PRIMARY KEY,
-            username TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL,
-            salt TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS sessions (
-            token TEXT PRIMARY KEY,
-            created_at INTEGER NOT NULL
-        );
-        "#,
-    )?;
 
     let base_url = std::env::var("BASE_URL")
         .ok()
@@ -216,9 +202,9 @@ async fn main() -> anyhow::Result<()> {
     }
     tracing::info!("Uploads directory: {}", uploads_dir);
 
-    // Get w9-mail API URL
+    // Get w9-mail API URL (should be base URL like https://9.nu, not including /api)
     let w9_mail_api_url = std::env::var("W9_MAIL_API_URL")
-        .unwrap_or_else(|_| "https://9.nu/api".to_string());
+        .unwrap_or_else(|_| "https://9.nu".to_string());
     
     // Get JWT secret for verifying tokens from w9-mail (should match w9-mail's JWT_SECRET)
     let jwt_secret = std::env::var("JWT_SECRET")
@@ -264,8 +250,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/s/:code", get(handlers::short_handler))
         .route("/n/:code", get(handlers::notepad_handler))
         // Admin JSON API endpoints (frontend handles UI at /admin)
-        .route("/api/admin/login", post(handlers::admin_login_post))
-        .route("/api/admin/logout", post(handlers::admin_logout))
         .route("/api/admin/items", get(handlers::admin_items))
         .route("/api/admin/items/:code/:kind", post(handlers::admin_delete_item_with_kind))
         .route("/api/admin/items/:code", post(handlers::admin_delete_item))

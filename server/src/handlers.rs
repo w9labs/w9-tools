@@ -1,12 +1,10 @@
 // The final, corrected handlers.rs file
 
 use axum::extract::{Form, Multipart, Path, Query, State};
-use axum_extra::typed_header::TypedHeader;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, request::Parts};
 use axum::response::{Html, IntoResponse, Redirect};
 use axum::Json;
 use axum::debug_handler;
-use axum_extra::headers::Cookie;
 use axum::async_trait;
 use axum::extract::FromRequestParts;
 use jsonwebtoken::{decode, DecodingKey, Validation};
@@ -32,13 +30,6 @@ pub async fn cors_preflight() -> impl IntoResponse {
 
 // Removed CodeParams; using Path<String> directly for routes with one :code param
 
-// Utility to extract the admin cookie token
-fn extract_admin_token(cookie: Option<TypedHeader<Cookie>>) -> Option<String> {
-    cookie
-        .as_ref()
-        .and_then(|TypedHeader(c)| c.get("w9_admin"))
-        .map(|value| value.to_string())
-}
 
 // Maximum file size: 1 GiB
 const MAX_FILE_SIZE: usize = 1024 * 1024 * 1024;
@@ -574,17 +565,6 @@ fn generate_token(len: usize) -> String {
         .collect()
 }
 
-async fn require_admin_token(db_path: &str, token_opt: Option<&str>) -> bool {
-    if let Some(token) = token_opt {
-        if let Ok(conn) = Connection::open(db_path) {
-            if let Ok(mut stmt) = conn.prepare("SELECT 1 FROM sessions WHERE token = ?1") {
-                let exists: Result<i32, _> = stmt.query_row(params![token], |r| r.get(0));
-                return exists.is_ok();
-            }
-        }
-    }
-    false
-}
 
 // JWT Claims from w9-mail
 #[derive(Debug, Serialize, Deserialize)]
@@ -600,6 +580,7 @@ struct Claims {
 pub struct AuthUser {
     pub id: String,
     pub email: String,
+    pub role: String,
 }
 
 // Extract AuthUser from JWT token
@@ -632,6 +613,7 @@ where
         Ok(AuthUser {
             id: token_data.claims.sub,
             email: token_data.claims.email,
+            role: token_data.claims.role,
         })
     }
 }
@@ -654,80 +636,28 @@ where
     }
 }
 
-#[derive(Deserialize)]
-pub struct AdminLoginForm { pub username: String, pub password: String }
+// Admin user - requires admin role
+pub struct AdminUser(pub AuthUser);
 
-pub async fn admin_login_post(State(state): State<AppState>, Form(f): Form<AdminLoginForm>) -> impl IntoResponse {
-    let conn = match Connection::open(&state.db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to open database: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database error"}))).into_response();
+#[async_trait]
+impl<S> FromRequestParts<S> for AdminUser
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let user = AuthUser::from_request_parts(parts, state).await?;
+        if user.role.to_lowercase() != "admin" {
+            return Err((StatusCode::FORBIDDEN, "Admin access required"));
         }
-    };
-
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM admin", [], |r| r.get(0)).unwrap_or(0);
-    if count == 0 {
-        let salt = generate_token(16);
-        let hash = hash_with_salt(&f.password, &salt);
-        if let Err(e) = conn.execute("INSERT INTO admin (id, username, password_hash, salt) VALUES (1, ?1, ?2, ?3)", params![f.username, hash, salt]) {
-            tracing::error!("Failed to create admin user: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to create user"}))).into_response();
-        }
-        tracing::info!("Created first admin user: {}", f.username);
+        Ok(AdminUser(user))
     }
-
-    let row = conn
-        .prepare("SELECT password_hash, salt FROM admin WHERE username = ?1")
-        .and_then(|mut s| s.query_row(params![f.username], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))));
-    
-    let (hash, salt) = match row {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!("Login failed for user '{}': {}", f.username, e);
-            return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Invalid credentials"}))).into_response();
-        }
-    };
-
-    if hash != hash_with_salt(&f.password, &salt) {
-        tracing::warn!("Invalid password for user '{}'", f.username);
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Invalid credentials"}))).into_response();
-    }
-
-    let token = generate_token(48);
-    if let Err(e) = conn.execute("INSERT INTO sessions (token, created_at) VALUES (?1, strftime('%s','now'))", params![token.clone()]) {
-        tracing::error!("Failed to create session: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to create session"}))).into_response();
-    }
-
-    let mut headers = HeaderMap::new();
-    let cookie = format!("w9_admin={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000", token);
-    if let Err(e) = HeaderValue::from_str(&cookie) {
-        tracing::error!("Failed to create cookie header: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Server error"}))).into_response();
-    }
-    headers.insert(axum::http::header::SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
-    
-    tracing::info!("Successful login for user '{}'", f.username);
-    (StatusCode::OK, headers, Json(serde_json::json!({"success": true}))).into_response()
 }
 
-pub async fn admin_logout(State(state): State<AppState>, cookie: Option<TypedHeader<Cookie>>) -> impl IntoResponse {
-    if let Some(tok) = extract_admin_token(cookie) {
-        if let Ok(conn) = Connection::open(&state.db_path) {
-            let _ = conn.execute("DELETE FROM sessions WHERE token = ?1", params![tok]);
-        }
-    }
-    let mut headers = HeaderMap::new();
-    headers.insert(axum::http::header::SET_COOKIE, HeaderValue::from_static("w9_admin=; Max-Age=0; Path=/"));
-    (StatusCode::OK, headers, Json(serde_json::json!({"success": true}))).into_response()
-}
 
 #[debug_handler]
-pub async fn admin_items(State(state): State<AppState>, cookie: Option<TypedHeader<Cookie>>) -> impl IntoResponse {
-    if !require_admin_token(&state.db_path, extract_admin_token(cookie).as_deref()).await {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response();
-    }
+pub async fn admin_items(State(state): State<AppState>, AdminUser(_): AdminUser) -> impl IntoResponse {
     
     let conn = match Connection::open(&state.db_path) {
         Ok(c) => c,
@@ -772,11 +702,8 @@ pub async fn admin_items(State(state): State<AppState>, cookie: Option<TypedHead
 pub async fn admin_delete_item_with_kind(
     State(state): State<AppState>,
     Path((code, kind)): Path<(String, String)>,
-    cookie: Option<TypedHeader<Cookie>>,
+    AdminUser(_): AdminUser,
 ) -> impl IntoResponse {
-    if !require_admin_token(&state.db_path, extract_admin_token(cookie).as_deref()).await {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response();
-    }
     
     let code_to_delete = code;
     let kind_to_delete = Some(kind);
@@ -836,11 +763,8 @@ pub async fn admin_delete_item_with_kind(
 pub async fn admin_delete_item(
     State(state): State<AppState>,
     Path(code): Path<String>,
-    cookie: Option<TypedHeader<Cookie>>,
+    AdminUser(_): AdminUser,
 ) -> impl IntoResponse {
-    if !require_admin_token(&state.db_path, extract_admin_token(cookie).as_deref()).await {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response();
-    }
     
     // For backward compatibility, delete all items with this code
     let code_to_delete = code;
@@ -1383,8 +1307,10 @@ pub struct LoginRequest {
 
 pub async fn login(State(state): State<AppState>, Json(payload): Json<LoginRequest>) -> impl IntoResponse {
     let client = reqwest::Client::new();
+    let url = format!("{}/api/auth/login", state.w9_mail_api_url);
+    tracing::debug!("Forwarding login request to: {}", url);
     match client
-        .post(&format!("{}/api/auth/login", state.w9_mail_api_url))
+        .post(&url)
         .json(&payload)
         .send()
         .await
@@ -1393,10 +1319,11 @@ pub async fn login(State(state): State<AppState>, Json(payload): Json<LoginReque
             let status_code = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
             let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            tracing::debug!("Login response status: {}, body: {}", status_code, body);
             (status, Json(serde_json::json!(serde_json::from_str::<serde_json::Value>(&body).unwrap_or(serde_json::json!({"error": "Invalid response"})))))
         }
         Err(e) => {
-            tracing::error!("Failed to forward login request: {}", e);
+            tracing::error!("Failed to forward login request to {}: {}", url, e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to connect to authentication service"})))
         }
     }
