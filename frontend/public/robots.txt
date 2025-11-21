@@ -4,6 +4,7 @@ Disallow: /api/
 Disallow: /files/
 Disallow: /admin
 Disallow: /admin/login
+Disallow: /profile
 Disallow: /r/
 Disallow: /s/
 Disallow: /n/

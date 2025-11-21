@@ -1,4 +1,4 @@
-use axum::routing::{get, post};
+use axum::routing::{get, post, patch, delete};
 use axum::{Router, Json};
 use axum::extract::DefaultBodyLimit;
 use std::net::SocketAddr;
@@ -114,11 +114,30 @@ async fn main() -> anyhow::Result<()> {
                 kind TEXT NOT NULL,        -- 'url' | 'file' | 'notepad'
                 value TEXT NOT NULL,       -- url or 'file:filename' or markdown content
                 created_at INTEGER NOT NULL,
+                user_id TEXT,              -- NULL for anonymous, user_id from w9-mail for authenticated users
                 PRIMARY KEY (code, kind)
             );
             CREATE INDEX IF NOT EXISTS idx_items_code ON items(code);
+            CREATE INDEX IF NOT EXISTS idx_items_user_id ON items(user_id);
             "#,
         )?;
+    }
+    
+    // Migrate existing items table to add user_id column if it doesn't exist
+    {
+        let table_info: Result<String, _> = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='items'",
+            [],
+            |r| r.get(0),
+        );
+        if let Ok(sql) = table_info {
+            if !sql.contains("user_id") {
+                tracing::info!("Adding user_id column to items table...");
+                conn.execute("ALTER TABLE items ADD COLUMN user_id TEXT", [])?;
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_items_user_id ON items(user_id)", [])?;
+                tracing::info!("Migration completed: user_id column added");
+            }
+        }
     }
     
     conn.execute_batch(
@@ -151,10 +170,20 @@ async fn main() -> anyhow::Result<()> {
     }
     tracing::info!("Uploads directory: {}", uploads_dir);
 
+    // Get w9-mail API URL
+    let w9_mail_api_url = std::env::var("W9_MAIL_API_URL")
+        .unwrap_or_else(|_| "https://9.nu/api".to_string());
+    
+    // Get JWT secret for verifying tokens from w9-mail (should match w9-mail's JWT_SECRET)
+    let jwt_secret = std::env::var("JWT_SECRET")
+        .unwrap_or_else(|_| "change-me-in-production".to_string());
+    
     let app_state = handlers::AppState { 
         db_path: db_path.clone(), 
         base_url: base_url.clone(),
         uploads_dir: uploads_dir.clone(),
+        w9_mail_api_url: w9_mail_api_url.clone(),
+        jwt_secret: jwt_secret.clone(),
     };
 
     // File serving (no state/auth required)
@@ -171,6 +200,19 @@ async fn main() -> anyhow::Result<()> {
         // API endpoints only (no UI)
         .route("/api/upload", post(handlers::api_upload))
         .route("/api/notepad", post(handlers::api_notepad))
+        // Auth endpoints (forward to w9-mail)
+        .route("/api/auth/login", post(handlers::login))
+        .route("/api/auth/register", post(handlers::register))
+        .route("/api/auth/password-reset", post(handlers::request_password_reset))
+        .route("/api/auth/change-password", post(handlers::change_password))
+        // User profile endpoints
+        .route("/api/user/items", get(handlers::user_items))
+        .route("/api/user/items/:code/:kind", post(handlers::user_delete_item))
+        .route("/api/user/items/:code/:kind/update", post(handlers::user_update_item))
+        // Admin user management endpoints (forward to w9-mail)
+        .route("/api/admin/users", get(handlers::admin_list_users).post(handlers::admin_create_user))
+        .route("/api/admin/users/:id", patch(handlers::admin_update_user).delete(handlers::admin_delete_user))
+        .route("/api/admin/users/send-reset", post(handlers::admin_send_password_reset))
         // Short link redirects
         .route("/r/:code", get(handlers::result_handler))
         .route("/s/:code", get(handlers::short_handler))

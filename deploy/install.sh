@@ -159,6 +159,8 @@ PORT=$APP_PORT
 BASE_URL=$BASE_URL
 DATABASE_PATH=$DATA_DIR/w9.db
 UPLOADS_DIR=$UPLOADS_DIR
+W9_MAIL_API_URL=${W9_MAIL_API_URL:-https://9.nu/api}
+JWT_SECRET=${JWT_SECRET:-change-me-in-production}
 EOF
 
 # Systemd unit

@@ -36,4 +36,22 @@
     <priority>0.1</priority>
     <lastmod>2025-01-20</lastmod>
   </url>
+  <url>
+    <loc>https://w9.se/login</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+    <lastmod>2025-01-20</lastmod>
+  </url>
+  <url>
+    <loc>https://w9.se/register</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+    <lastmod>2025-01-20</lastmod>
+  </url>
+  <url>
+    <loc>https://w9.se/profile</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <lastmod>2025-01-20</lastmod>
+  </url>
 </urlset>
