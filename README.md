@@ -6,9 +6,10 @@ W9 Tools is a lightweight utility stack for instant link shortening, markdown no
 
 - Share short links pointing to URLs, files, or markdown notepads
 - Generate optional QR codes for every short link
-- Admin panel for inspecting or deleting any item (links, files, notepads)
+- Built-in authentication: register, verify email, login, password reset/change
 - Markdown notepad writer with custom short codes and server-side rendering
 - File uploads with automatic previews for images and media
+- Admin panel for items, users, and email sender selection
 
 ## Architecture
 
@@ -35,15 +36,12 @@ The repository includes an opinionated installation script that compiles the bac
    git clone https://github.com/ShayNeeo/w9-tools.git
    cd w9-tools/deploy
    ```
-2. Set the environment variables used by the script (either export or inline):
+2. Run the installer **with the required variables inline on the same command** so they are passed to `sudo`:
    ```bash
-   export DOMAIN=example.com
-   export BASE_URL=https://example.com
-   export APP_PORT=10105            # optional, default defined in script
-   ```
-3. Run the installer:
-   ```bash
-   ./install.sh
+   DOMAIN=example.com \
+   BASE_URL=https://example.com \
+   W9_MAIL_API_TOKEN=<jwt-from-w9-mail> \
+   sudo -E ./deploy/install.sh
    ```
    The script performs the following:
    - Installs missing packages (Rust toolchain, Node/npm, nginx, sqlite, etc.)
@@ -82,15 +80,28 @@ Use `VITE_API_BASE_URL` in `.env` to point the frontend dev server at the backen
 
 ## Configuration
 
-| Variable        | Default               | Description                               |
-|-----------------|-----------------------|-------------------------------------------|
-| `HOST`          | `0.0.0.0`             | Listen address for the backend             |
-| `PORT`          | `8080`                | Backend port                               |
-| `BASE_URL`      | `http://localhost:8080` | Public base URL used in short links         |
-| `DATABASE_PATH` | `data/w9.db`          | SQLite database path                       |
-| `UPLOADS_DIR`   | `uploads`             | Filesystem directory for uploaded assets   |
+| Variable                | Default                         | Description |
+|------------------------|---------------------------------|-------------|
+| `HOST`                 | `0.0.0.0`                       | Listen address |
+| `PORT`                 | `8080`                          | Backend port |
+| `BASE_URL`             | `http://localhost:8080`         | Public base URL used in short links |
+| `DATABASE_PATH`        | `data/w9.db`                    | SQLite database path |
+| `UPLOADS_DIR`          | `uploads`                       | Filesystem directory for uploads |
+| `PASSWORD_RESET_BASE_URL` | `${BASE_URL}/reset-password` | Link used inside password reset emails |
+| `VERIFICATION_BASE_URL`   | `${BASE_URL}/verify-email`   | Link used inside registration verification emails |
+| `W9_MAIL_API_URL`      | `https://w9.nu`                 | w9-mail base URL for transactional email |
+| `W9_MAIL_API_TOKEN`    | _(empty)_                       | JWT from w9-mail used when calling `/api/send` and sender APIs |
+| `EMAIL_FROM_ADDRESS`   | `W9 Tools <no-reply@domain>`    | Fallback sender if no w9-mail sender is configured |
+
+The installer writes these values to `/etc/default/w9`. To update secrets (like `W9_MAIL_API_TOKEN`) edit that file and run `sudo systemctl restart w9`.
 
 When deploying via `install.sh`, these values are written to `/etc/default/w9` and consumed by the systemd service.
+
+## Email + Verification Flow
+
+- The backend sends verification and reset messages through w9-mail. Supply `W9_MAIL_API_TOKEN` (a JWT obtained by logging into w9-mail as an admin) so the service can call `/api/send`.
+- After deployment, visit `/admin` → Email Sender tab to pick which w9-mail account/alias should send transactional mail. The choice is stored locally and used for all future emails.
+- Registration requires email verification. The verification link points to `${BASE_URL}/verify-email?token=...`, which the frontend handles and automatically signs the user in if successful.
 
 ## Usage Flow
 
@@ -101,7 +112,7 @@ When deploying via `install.sh`, these values are written to `/etc/default/w9` a
    - `/convert` (placeholder page for upcoming tools)
 3. For each short link, a QR code can be generated.
 4. Notepad entries render markdown on `/n/<code>` using Askama templates.
-5. Admin panel (`/admin`) requires initial credentials set on first login; this panel shows every item with delete actions.
+5. Admin panel (`/admin`) exposes tabs for Items, Users, and Email Sender configuration.
 
 ## Contributing
 
