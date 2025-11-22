@@ -253,6 +253,7 @@ async fn main() -> anyhow::Result<()> {
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| format!("{}/verify-email", base_url.trim_end_matches('/')));
     let w9_mail_api_token = std::env::var("W9_MAIL_API_TOKEN").ok().filter(|v| !v.trim().is_empty());
+    let turnstile_secret = std::env::var("TURNSTILE_SECRET_KEY").ok().filter(|v| !v.trim().is_empty());
     
     let app_state = handlers::AppState { 
         db_path: db_path.clone(), 
@@ -264,6 +265,7 @@ async fn main() -> anyhow::Result<()> {
         verification_base_url,
         w9_mail_api_token,
         email_sender,
+        turnstile_secret,
     };
 
     // File serving (no state/auth required)

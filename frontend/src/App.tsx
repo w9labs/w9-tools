@@ -2,6 +2,67 @@ import { useState, useRef, FormEvent, useEffect } from 'react'
 import { marked } from 'marked'
 
 const API_BASE: string = import.meta.env?.VITE_API_BASE_URL || ''
+const TURNSTILE_SITE_KEY: string = import.meta.env?.VITE_TURNSTILE_SITE_KEY || ''
+
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (element: string | HTMLElement, options: {
+        sitekey: string
+        callback?: (token: string) => void
+        'error-callback'?: () => void
+        'expired-callback'?: () => void
+      }) => string
+      reset: (widgetId?: string) => void
+      remove: (widgetId?: string) => void
+    }
+  }
+}
+
+function TurnstileWidget({ onVerify, onError }: { onVerify: (token: string) => void; onError?: () => void }) {
+  const widgetRef = useRef<HTMLDivElement>(null)
+  const widgetIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!TURNSTILE_SITE_KEY || !widgetRef.current) return
+
+    const checkTurnstile = () => {
+      if (window.turnstile && widgetRef.current && !widgetIdRef.current) {
+        widgetIdRef.current = window.turnstile.render(widgetRef.current, {
+          sitekey: TURNSTILE_SITE_KEY,
+          callback: (token: string) => {
+            onVerify(token)
+          },
+          'error-callback': () => {
+            if (onError) onError()
+          },
+          'expired-callback': () => {
+            if (widgetIdRef.current) {
+              window.turnstile?.reset(widgetIdRef.current)
+            }
+          }
+        })
+      } else if (!window.turnstile) {
+        setTimeout(checkTurnstile, 100)
+      }
+    }
+
+    checkTurnstile()
+
+    return () => {
+      if (widgetIdRef.current && window.turnstile) {
+        window.turnstile.remove(widgetIdRef.current)
+        widgetIdRef.current = null
+      }
+    }
+  }, [onVerify, onError])
+
+  if (!TURNSTILE_SITE_KEY) {
+    return null
+  }
+
+  return <div ref={widgetRef} style={{ marginTop: '1rem' }}></div>
+}
 const adminApi = (path: string) => {
   const suffix = path.startsWith('/') ? path : `/${path}`
   return joinUrl(API_BASE, `/api/admin${suffix}`)
@@ -1384,6 +1445,8 @@ function LoginPage() {
   const [resetEmail, setResetEmail] = useState('')
   const [resetLoading, setResetLoading] = useState(false)
   const [resetMessage, setResetMessage] = useState<string | null>(null)
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null)
+  const [resetTurnstileToken, setResetTurnstileToken] = useState<string | null>(null)
 
   // Get redirect parameter from URL
   const urlParams = new URLSearchParams(window.location.search)
@@ -1391,13 +1454,17 @@ function LoginPage() {
 
   async function handleLogin(e: FormEvent) {
     e.preventDefault()
+    if (TURNSTILE_SITE_KEY && !turnstileToken) {
+      setError('Please complete the security check')
+      return
+    }
     setLoading(true)
     setError(null)
     try {
       const resp = await fetch(joinUrl(API_BASE, '/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({ email, password, turnstile_token: turnstileToken })
       })
       const data = await resp.json()
       if (resp.ok && data.token) {
@@ -1420,13 +1487,17 @@ function LoginPage() {
 
   async function handlePasswordReset(e: FormEvent) {
     e.preventDefault()
+    if (TURNSTILE_SITE_KEY && !resetTurnstileToken) {
+      setResetMessage('Please complete the security check')
+      return
+    }
     setResetLoading(true)
     setResetMessage(null)
     try {
       const resp = await fetch(joinUrl(API_BASE, '/api/auth/password-reset'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: resetEmail })
+        body: JSON.stringify({ email: resetEmail, turnstile_token: resetTurnstileToken })
       })
       const data = await resp.json()
       if (resp.ok) {
@@ -1470,6 +1541,10 @@ function LoginPage() {
               />
             </label>
             {error && <div className="error">{error}</div>}
+            <TurnstileWidget 
+              onVerify={(token) => setTurnstileToken(token)}
+              onError={() => setTurnstileToken(null)}
+            />
             <button type="submit" className="button" disabled={loading}>
               {loading ? 'Logging in...' : 'Login'}
             </button>
@@ -1498,11 +1573,15 @@ function LoginPage() {
                 {resetMessage}
               </div>
             )}
+            <TurnstileWidget 
+              onVerify={(token) => setResetTurnstileToken(token)}
+              onError={() => setResetTurnstileToken(null)}
+            />
             <button type="submit" className="button" disabled={resetLoading}>
               {resetLoading ? 'Sending...' : 'Send Reset Link'}
             </button>
             <p style={{ marginTop: '10px' }}>
-              <a href="#" onClick={(e) => { e.preventDefault(); setShowReset(false); setResetMessage(null); }}>Back to login</a>
+              <a href="#" onClick={(e) => { e.preventDefault(); setShowReset(false); setResetMessage(null); setResetTurnstileToken(null); }}>Back to login</a>
             </p>
           </form>
         )}
@@ -1519,9 +1598,14 @@ function RegisterPage() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null)
 
   async function handleRegister(e: FormEvent) {
     e.preventDefault()
+    if (TURNSTILE_SITE_KEY && !turnstileToken) {
+      setError('Please complete the security check')
+      return
+    }
     setLoading(true)
     setError(null)
     setSuccess(null)
@@ -1529,7 +1613,7 @@ function RegisterPage() {
       const resp = await fetch(joinUrl(API_BASE, '/api/auth/register'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({ email, password, turnstile_token: turnstileToken })
       })
       const data = await resp.json()
       if (resp.ok) {
@@ -1574,6 +1658,10 @@ function RegisterPage() {
           </label>
           {error && <div className="error">{error}</div>}
           {success && <div style={{ color: 'green', marginBottom: '10px' }}>{success}</div>}
+          <TurnstileWidget 
+            onVerify={(token) => setTurnstileToken(token)}
+            onError={() => setTurnstileToken(null)}
+          />
           <button type="submit" className="button" disabled={loading}>
             {loading ? 'Registering...' : 'Register'}
           </button>
@@ -1660,6 +1748,7 @@ function ResetPasswordPage() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null)
 
   useEffect(() => {
     const urlToken = new URLSearchParams(window.location.search).get('token')
@@ -1687,6 +1776,11 @@ function ResetPasswordPage() {
       return
     }
 
+    if (TURNSTILE_SITE_KEY && !turnstileToken) {
+      setError('Please complete the security check')
+      return
+    }
+
     setLoading(true)
     setError(null)
     
@@ -1697,7 +1791,8 @@ function ResetPasswordPage() {
         body: JSON.stringify({
           token,
           new_password: newPassword,
-          confirm_password: confirmPassword
+          confirm_password: confirmPassword,
+          turnstile_token: turnstileToken
         })
       })
       const data = await resp.json()
@@ -1762,6 +1857,10 @@ function ResetPasswordPage() {
                   />
                 </label>
                 {error && <div className="error">{error}</div>}
+                <TurnstileWidget 
+                  onVerify={(token) => setTurnstileToken(token)}
+                  onError={() => setTurnstileToken(null)}
+                />
                 <button type="submit" className="button" disabled={loading}>
                   {loading ? 'Resetting...' : 'Reset Password'}
                 </button>

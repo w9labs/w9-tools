@@ -259,12 +259,41 @@ pub struct AppState {
     pub verification_base_url: String,
     pub w9_mail_api_token: Option<String>,
     pub email_sender: Arc<RwLock<Option<EmailSenderConfig>>>,
+    pub turnstile_secret: Option<String>,
 }
 
 const PASSWORD_MIN_LEN: usize = 8;
 const PASSWORD_RESET_TOKEN_TTL_HOURS: i64 = 24;
 const EMAIL_VERIFICATION_TOKEN_TTL_HOURS: i64 = 48;
 const EMAIL_SENDER_SETTING_KEY: &str = "email_sender";
+
+async fn verify_turnstile(secret: &str, token: &str) -> Result<bool, String> {
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "secret": secret,
+        "response": token,
+    });
+    
+    match client
+        .post("https://challenges.cloudflare.com/turnstile/v0/siteverify")
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            match resp.json::<serde_json::Value>().await {
+                Ok(data) => {
+                    let success = data.get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    Ok(success)
+                }
+                Err(e) => Err(format!("Failed to parse Turnstile response: {}", e))
+            }
+        }
+        Err(e) => Err(format!("Failed to verify Turnstile token: {}", e))
+    }
+}
 
 #[derive(Debug, Clone)]
 struct UserRecord {
@@ -1794,9 +1823,38 @@ pub async fn notepad_handler(State(state): State<AppState>, Path(code): Path<Str
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
+    #[serde(default)]
+    pub turnstile_token: Option<String>,
 }
 
 pub async fn login(State(state): State<AppState>, Json(payload): Json<LoginRequest>) -> impl IntoResponse {
+    // Verify Turnstile token if secret is configured
+    if let Some(secret) = &state.turnstile_secret {
+        if let Some(token) = &payload.turnstile_token {
+            match verify_turnstile(secret, token).await {
+                Ok(true) => {},
+                Ok(false) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({"error": "Security check failed"})),
+                    )
+                }
+                Err(e) => {
+                    tracing::warn!("Turnstile verification error: {}", e);
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": "Security check error"})),
+                    )
+                }
+            }
+        } else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Security check required"})),
+            )
+        }
+    }
+
     let email = match normalize_email(&payload.email) {
         Ok(email) => email,
         Err(msg) => {
@@ -1881,9 +1939,38 @@ pub async fn login(State(state): State<AppState>, Json(payload): Json<LoginReque
 pub struct RegisterRequest {
     pub email: String,
     pub password: String,
+    #[serde(default)]
+    pub turnstile_token: Option<String>,
 }
 
 pub async fn register(State(state): State<AppState>, Json(payload): Json<RegisterRequest>) -> impl IntoResponse {
+    // Verify Turnstile token if secret is configured
+    if let Some(secret) = &state.turnstile_secret {
+        if let Some(token) = &payload.turnstile_token {
+            match verify_turnstile(secret, token).await {
+                Ok(true) => {},
+                Ok(false) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({"error": "Security check failed"})),
+                    )
+                }
+                Err(e) => {
+                    tracing::warn!("Turnstile verification error: {}", e);
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": "Security check error"})),
+                    )
+                }
+            }
+        } else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Security check required"})),
+            )
+        }
+    }
+
     let email = match normalize_email(&payload.email) {
         Ok(email) => email,
         Err(msg) => {
@@ -2178,6 +2265,8 @@ pub struct PasswordResetConfirmRequest {
     pub token: String,
     pub new_password: String,
     pub confirm_password: String,
+    #[serde(default)]
+    pub turnstile_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2264,6 +2353,33 @@ pub async fn request_password_reset(
     State(state): State<AppState>,
     Json(payload): Json<AdminSendPasswordResetRequest>,
 ) -> impl IntoResponse {
+    // Verify Turnstile token if secret is configured
+    if let Some(secret) = &state.turnstile_secret {
+        if let Some(token) = &payload.turnstile_token {
+            match verify_turnstile(secret, token).await {
+                Ok(true) => {},
+                Ok(false) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({"error": "Security check failed"})),
+                    )
+                }
+                Err(e) => {
+                    tracing::warn!("Turnstile verification error: {}", e);
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": "Security check error"})),
+                    )
+                }
+            }
+        } else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Security check required"})),
+            )
+        }
+    }
+
     let email = match normalize_email(&payload.email) {
         Ok(email) => email,
         Err(msg) => {
@@ -2312,6 +2428,33 @@ pub async fn confirm_password_reset(
     State(state): State<AppState>,
     Json(payload): Json<PasswordResetConfirmRequest>,
 ) -> impl IntoResponse {
+    // Verify Turnstile token if secret is configured
+    if let Some(secret) = &state.turnstile_secret {
+        if let Some(token) = &payload.turnstile_token {
+            match verify_turnstile(secret, token).await {
+                Ok(true) => {},
+                Ok(false) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({"error": "Security check failed"})),
+                    )
+                }
+                Err(e) => {
+                    tracing::warn!("Turnstile verification error: {}", e);
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": "Security check error"})),
+                    )
+                }
+            }
+        } else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Security check required"})),
+            )
+        }
+    }
+
     if payload.new_password != payload.confirm_password {
         return (
             StatusCode::BAD_REQUEST,

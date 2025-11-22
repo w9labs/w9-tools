@@ -105,7 +105,12 @@ if [ "$FRONTEND_NEEDS_BUILD" = "true" ]; then
     else
         npm install --prefer-offline --no-audit 2>&1 | tail -1
     fi
-    npm run build 2>&1 | tail -1
+    # Build with Turnstile site key if provided
+    if [ -n "${VITE_TURNSTILE_SITE_KEY:-}" ]; then
+        VITE_TURNSTILE_SITE_KEY="$VITE_TURNSTILE_SITE_KEY" npm run build 2>&1 | tail -1
+    else
+        npm run build 2>&1 | tail -1
+    fi
 else
     echo "✓ Frontend is up to date, skipping rebuild"
 fi
@@ -169,6 +174,7 @@ JWT_SECRET=${JWT_SECRET:-change-me-in-production}
 EMAIL_FROM_ADDRESS="$DEFAULT_FROM"
 PASSWORD_RESET_BASE_URL="$RESET_BASE"
 VERIFICATION_BASE_URL="$VERIFY_BASE"
+TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY:-}
 EOF
 
 # Systemd unit
