@@ -2194,6 +2194,8 @@ pub struct AdminUpdateUserRequest {
 #[derive(Deserialize)]
 pub struct AdminSendPasswordResetRequest {
     pub email: String,
+    #[serde(default)]
+    pub turnstile_token: Option<String>,
 }
 
 #[derive(Deserialize)]
