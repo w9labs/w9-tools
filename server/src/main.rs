@@ -254,7 +254,20 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| format!("{}/verify-email", base_url.trim_end_matches('/')));
     let w9_mail_api_token = std::env::var("W9_MAIL_API_TOKEN").ok().filter(|v| !v.trim().is_empty());
     let turnstile_secret = std::env::var("TURNSTILE_SECRET_KEY").ok().filter(|v| !v.trim().is_empty());
-    let qr_logo_path = std::env::var("QR_LOGO_PATH").ok().filter(|v| !v.trim().is_empty());
+    
+    // Default logo path matches install.sh: FRONTEND_PUBLIC=/var/www/w9
+    let default_logo_path = "/var/www/w9/android-chrome-512x512.png";
+    let qr_logo_path = std::env::var("QR_LOGO_PATH")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            // Use default if it exists
+            if std::path::Path::new(default_logo_path).exists() {
+                Some(default_logo_path.to_string())
+            } else {
+                None
+            }
+        });
     
     if let Some(ref logo) = qr_logo_path {
         if !std::path::Path::new(logo).exists() {
@@ -262,6 +275,8 @@ async fn main() -> anyhow::Result<()> {
         } else {
             tracing::info!("QR logo configured: {}", logo);
         }
+    } else {
+        tracing::debug!("QR logo not configured (default path {} does not exist)", default_logo_path);
     }
     
     let app_state = handlers::AppState { 
