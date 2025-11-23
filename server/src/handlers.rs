@@ -656,13 +656,15 @@ fn render_transactional_email(
       <td align="center">
         <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:640px;border:2px solid #fdfdfd;padding:28px;background:#000;">
           <tr><td style="text-align:left;">
-            <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px;">
-              <div style="width:42px;height:42px;border:2px solid #fdfdfd;display:flex;align-items:center;justify-content:center;font-weight:bold;color:#fdfdfd;">W9</div>
-              <div>
-                <div style="color:#fdfdfd;font-size:18px;letter-spacing:0.1em;text-transform:uppercase;">W9 Tools</div>
-                <div style="color:#9a9a9a;font-size:12px;">Fast drops • Short links • Secure notes</div>
-              </div>
-            </div>
+            <table role="presentation" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+              <tr>
+                <td style="width:42px;height:42px;border:2px solid #fdfdfd;text-align:center;vertical-align:middle;font-weight:bold;color:#fdfdfd;line-height:42px;font-size:16px;padding:0;margin:0;">W9</td>
+                <td style="padding-left:12px;vertical-align:middle;">
+                  <div style="color:#fdfdfd;font-size:18px;letter-spacing:0.1em;text-transform:uppercase;">W9 Tools</div>
+                  <div style="color:#9a9a9a;font-size:12px;">Fast drops • Short links • Secure notes</div>
+                </td>
+              </tr>
+            </table>
             <h1 style="margin:0 0 20px;font-size:22px;letter-spacing:0.08em;text-transform:uppercase;color:#fdfdfd;">{title}</h1>
             {paragraphs}
             <div style="margin:32px 0;">
