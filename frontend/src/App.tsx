@@ -1050,6 +1050,12 @@ function Homepage() {
                 Sentry automatically detects and notifies you of critical performance issues so you can trace every slow transaction to a poor-performing API call or DB query.
               </p>
             </div>
+            <div className="sponsor-card">
+              <div className="sponsor-logo" aria-label="Algolia">
+                <img src="/algolia.png" alt="Algolia logo" />
+              </div>
+              <p className="sponsor-credit">Courtesy of Algolia · search infrastructure partner</p>
+            </div>
           </div>
           <p className="sponsor-footnote">Credits curated by W9 Labs · reach out via hi@w9.se to be listed here.</p>
         </section>
