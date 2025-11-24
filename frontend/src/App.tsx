@@ -133,6 +133,7 @@ function useRoute() {
 function Header() {
   const path = window.location.pathname
   const [token, setToken] = useState<string | null>(localStorage.getItem('w9_token'))
+  const isHomepage = path === '/' || path === ''
   
   useEffect(() => {
     const checkToken = () => {
@@ -150,15 +151,17 @@ function Header() {
   
   return (
     <header className="header">
-      <div className="brand">
-        <div>
-          <h1>W9 TOOLS</h1>
-          <span>Fast drops • Short links • Secure notes</span>
+      {!isHomepage && (
+        <div className="brand">
+          <div>
+            <h1>W9 TOOLS</h1>
+            <span>Fast drops • Short links • Secure notes</span>
+          </div>
+          <div className="pill" style={{ borderColor: token ? '#00ffd0' : undefined, color: token ? '#00ffd0' : undefined }}>
+            {token ? 'SIGNED IN' : 'GUEST'}
+          </div>
         </div>
-        <div className="pill" style={{ borderColor: token ? '#00ffd0' : undefined, color: token ? '#00ffd0' : undefined }}>
-          {token ? 'SIGNED IN' : 'GUEST'}
-        </div>
-      </div>
+      )}
       <nav className="nav">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
           <a href="/" className={path === '/' ? 'nav-link active' : 'nav-link'}>Home</a>
