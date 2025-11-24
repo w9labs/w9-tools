@@ -1051,7 +1051,7 @@ function Homepage() {
               </p>
             </div>
           </div>
-          <p className="sponsor-footnote">Credits curated by W9 Labs · reach out via hi@w9.nu to be listed here.</p>
+          <p className="sponsor-footnote">Credits curated by W9 Labs · reach out via hi@w9.se to be listed here.</p>
         </section>
       </main>
       <Footer />
