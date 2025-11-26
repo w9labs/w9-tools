@@ -1110,6 +1110,14 @@ function Homepage() {
               </div>
               <p className="sponsor-credit">Courtesy of Algolia · search infrastructure partner</p>
             </div>
+            <div className="sponsor-card">
+              <div className="sponsor-logo" aria-label="FOSSVPS">
+                <a href="https://fossvps.org" target="_blank" rel="noreferrer">
+                  <img src="/fossvps.png" alt="FOSSVPS logo" />
+                </a>
+              </div>
+              <p className="sponsor-credit">FOSSVPS provide infrastructure for open-source developers.</p>
+            </div>
           </div>
           <p className="sponsor-footnote">Credits curated by W9 Labs · reach out via hi@w9.se to be listed here.</p>
         </section>
