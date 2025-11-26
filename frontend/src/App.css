@@ -5,6 +5,7 @@
   --muted: #bcbcbc;
   --border: #ffffff;
   --warning: #ff7b7b;
+  --frame-border-width: 2px;
 }
 
 * {
@@ -42,7 +43,7 @@ body {
 }
 
 .brand {
-  border: 2px solid var(--border);
+  border: var(--frame-border-width) solid var(--border);
   padding: 1rem;
   text-transform: uppercase;
   letter-spacing: 0.25em;
@@ -67,7 +68,7 @@ body {
 }
 
 .network-bar {
-  border: 2px solid var(--border);
+  border: var(--frame-border-width) solid var(--border);
   padding: 0.6rem 0.9rem;
   display: flex;
   flex-wrap: wrap;
@@ -376,7 +377,7 @@ table td {
 }
 
 .site-footer {
-  border: 2px solid var(--border);
+  border: var(--frame-border-width) solid var(--border);
   padding: 1rem;
   width: 100%;
   max-width: 720px;
@@ -448,7 +449,7 @@ table td {
 }
 
 .sponsor-card {
-  border: 2px solid var(--border);
+  border: var(--frame-border-width) solid var(--border);
   padding: 0.75rem;
   width: min(280px, 100%);
   display: flex;
@@ -459,7 +460,7 @@ table td {
 
 .sponsor-logo {
   width: 100%;
-  border: 2px solid var(--border);
+  border: var(--frame-border-width) solid var(--border);
   padding: 0.75rem;
   display: flex;
   align-items: center;
@@ -512,7 +513,7 @@ code {
 }
 
 .sender-card {
-  border: 2px solid var(--border);
+  border: var(--frame-border-width) solid var(--border);
   padding: 0.75rem;
   display: flex;
   flex-direction: column;
@@ -524,10 +525,13 @@ code {
 }
 
 .pill {
-  border: 2px solid var(--border);
-  padding: 0.25rem 0.8rem;
+  border: var(--frame-border-width) solid currentColor;
+  padding: 0.25rem 1.5rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .actions {
