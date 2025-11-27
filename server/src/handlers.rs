@@ -1125,17 +1125,28 @@ fn embed_logo_in_qr(qr_svg: &str, logo_path: &str) -> Result<String, Box<dyn std
         320.0 // default if no viewBox found
     };
     
-    // Logo should be about 20% of QR code size to maintain scannability
-    let logo_size = qr_size * 0.2;
+    // Logo should be small enough to avoid covering finder patterns (~18% of size)
+    let logo_size = qr_size * 0.18;
     let logo_x = (qr_size - logo_size) / 2.0;
     let logo_y = (qr_size - logo_size) / 2.0;
+    let logo_bg_padding = logo_size * 0.15;
+    let bg_x = logo_x - logo_bg_padding;
+    let bg_y = logo_y - logo_bg_padding;
+    let bg_size = logo_size + (logo_bg_padding * 2.0);
     
     // Find the closing </svg> tag and insert logo before it
     if let Some(pos) = qr_svg.rfind("</svg>") {
         let mut result = qr_svg[..pos].to_string();
         result.push_str(&format!(
-            r#"<image href="{}" x="{}" y="{}" width="{}" height="{}" preserveAspectRatio="xMidYMid meet"/>"#,
-            logo_data_uri, logo_x, logo_y, logo_size, logo_size
+            r#"<rect x="{bg_x}" y="{bg_y}" width="{bg_size}" height="{bg_size}" rx="{radius}" fill="#ffffff"/><image href="{logo_data_uri}" x="{logo_x}" y="{logo_y}" width="{logo_size}" height="{logo_size}" preserveAspectRatio="xMidYMid meet"/>"#,
+            bg_x = bg_x,
+            bg_y = bg_y,
+            bg_size = bg_size,
+            radius = logo_size * 0.08,
+            logo_data_uri = logo_data_uri,
+            logo_x = logo_x,
+            logo_y = logo_y,
+            logo_size = logo_size
         ));
         result.push_str("</svg>");
         Ok(result)
