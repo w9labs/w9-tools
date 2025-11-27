@@ -189,16 +189,18 @@ function Header() {
   return (
     <header className="header">
       <NetworkBar active="tools" />
-      <div className="brand">
-        <div>
-          <p className="eyebrow">Developed by W9 Labs</p>
-          <h1>W9 Tools</h1>
-          <span>Fast drops • Short links • Secure notes</span>
+      {!isHomepage && (
+        <div className="brand">
+          <div>
+            <p className="eyebrow">Developed by W9 Labs</p>
+            <h1>W9 Tools</h1>
+            <span>Fast drops • Short links • Secure notes</span>
+          </div>
+          <div className="pill" style={{ borderColor: token ? '#00ffd0' : undefined, color: token ? '#00ffd0' : undefined }}>
+            {token ? 'SIGNED IN' : 'GUEST'}
+          </div>
         </div>
-        <div className="pill" style={{ borderColor: token ? '#00ffd0' : undefined, color: token ? '#00ffd0' : undefined }}>
-          {token ? 'SIGNED IN' : 'GUEST'}
-        </div>
-      </div>
+      )}
       <nav className="nav">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
           <a href="/" className={path === '/' ? 'nav-link active' : 'nav-link'}>Home</a>
