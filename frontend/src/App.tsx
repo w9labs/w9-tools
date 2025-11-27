@@ -2490,6 +2490,14 @@ function ProfilePage() {
 export default function App() {
   const route = useRoute()
 
+  useEffect(() => {
+    if (route === 'home') {
+      document.title = 'W9 Labs — Open Source Infrastructure'
+    } else {
+      document.title = 'W9 Tools — Share Fast'
+    }
+  }, [route])
+
   if (route === 'admin') {
     return <AdminPanel />
   }
