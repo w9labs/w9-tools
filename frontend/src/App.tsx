@@ -1084,7 +1084,7 @@ function Homepage() {
                   <img src="/1password.svg" alt="1Password logo" />
                 </a>
               </div>
-              <p className="sponsor-credit">Courtesy of 1Password · secure storage partner</p>
+              <p className="sponsor-credit">Courtesy of 1Password · secure storage partner.</p>
             </div>
             <div className="sponsor-card">
               <div className="sponsor-logo" aria-label="Core sponsor">
@@ -1114,7 +1114,7 @@ function Homepage() {
                   <img src="/algolia.png" alt="Algolia logo" />
                 </a>
               </div>
-              <p className="sponsor-credit">Courtesy of Algolia · search infrastructure partner</p>
+              <p className="sponsor-credit">Algolia · provides search engines capable of delivering real-time results from the first keystroke.</p>
             </div>
             <div className="sponsor-card">
               <div className="sponsor-logo" aria-label="FOSSVPS">
