@@ -121,9 +121,31 @@ if [ "$FRONTEND_NEEDS_BUILD" = "true" ]; then
     # Optionally update package.json versions with npm-check-updates
     if [ "${AUTO_UPDATE_PACKAGE_JSON:-1}" != "0" ]; then
         if [ "${AUTO_UPDATE_CORE_DEPS:-0}" != "0" ]; then
-            echo "Updating package.json dependency ranges with npm-check-updates (including React/Next core deps)..."
+            echo "Updating package.json with npm-check-updates (including React/Next), then capping to tested versions..."
             npx npm-check-updates@latest -u 2>&1 | tail -1 \
               || echo "⚠ npm-check-updates failed (continuing with existing ranges)"
+            # Force core deps to known-good, published versions to avoid requesting non-existent releases
+            node <<'EOF' || echo "⚠ Failed to cap core deps; keep existing versions"
+const fs = require('fs');
+const path = require('path');
+const pkgPath = path.join(__dirname, 'package.json');
+const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+pkg.dependencies = pkg.dependencies || {};
+pkg.devDependencies = pkg.devDependencies || {};
+pkg.dependencies.react = "^18.3.1";
+pkg.dependencies["react-dom"] = "^18.3.1";
+pkg.dependencies.next = "16.0.7";
+if (pkg.devDependencies["eslint-config-next"] !== undefined) {
+  pkg.devDependencies["eslint-config-next"] = "16.0.7";
+}
+if (pkg.devDependencies["@types/react"] !== undefined) {
+  pkg.devDependencies["@types/react"] = "^18.2.0";
+}
+if (pkg.devDependencies["@types/react-dom"] !== undefined) {
+  pkg.devDependencies["@types/react-dom"] = "^18.2.0";
+}
+fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
+EOF
         else
             echo "Updating package.json dependency ranges with npm-check-updates (best-effort, core deps pinned)..."
             # Default: do not auto-bump core framework deps to avoid Next/React peer conflicts
