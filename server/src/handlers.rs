@@ -15,7 +15,7 @@ use mime_guess::from_path as mime_from_path;
 use nanoid::nanoid;
 use qrcode::render::svg::Color;
 use qrcode::QrCode;
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Row, query, query_as};
 use std::path::{Path as StdPath}; // Use StdPath to avoid conflict with axum::extract::Path
 use std::sync::Arc;
 use tokio::fs;
@@ -346,18 +346,7 @@ pub async fn verify_email_token(
         );
     }
 
-    let conn = match Connection::open(&state.db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to open database: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Database error"})),
-            );
-        }
-    };
-
-    let token_row = match consume_email_verification_token(&conn, &payload.token) {
+    let token_row = match consume_email_verification_token(&state.pool, &payload.token).await {
         Ok(Some(row)) => row,
         Ok(None) => {
             return (
@@ -376,25 +365,26 @@ pub async fn verify_email_token(
 
     let (user_id, expires_at) = token_row;
     if expires_at < Utc::now().timestamp() {
-        let _ = delete_email_verification_token(&conn, &payload.token);
+        let _ = delete_email_verification_token(&state.pool, &payload.token).await;
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Token expired"})),
         );
     }
 
-    let Some(mut user) = fetch_user_by_id(&conn, &user_id).unwrap_or(None) else {
-        let _ = delete_email_verification_token(&conn, &payload.token);
+    let Some(mut user) = fetch_user_by_id(&state.pool, &user_id).await.unwrap_or(None) else {
+        let _ = delete_email_verification_token(&state.pool, &payload.token).await;
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "User no longer exists"})),
         );
     };
 
-    if let Err(e) = conn.execute(
-        "UPDATE users SET is_verified = 1 WHERE id = ?1",
-        params![user.id],
-    ) {
+    if let Err(e) = sqlx::query("UPDATE users SET is_verified = TRUE WHERE id = $1")
+        .bind(&user.id)
+        .execute(&state.pool)
+        .await
+    {
         tracing::error!("Failed to update verification status: {}", e);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -402,7 +392,7 @@ pub async fn verify_email_token(
         );
     }
 
-    let _ = delete_email_verification_token(&conn, &payload.token);
+    let _ = delete_email_verification_token(&state.pool, &payload.token).await;
     user.is_verified = true;
 
     let token = match issue_jwt(&state, &user) {
@@ -432,23 +422,13 @@ pub async fn verify_email_token(
     )
 }
 
-fn fetch_user_by_email(conn: &Connection, email: &str) -> rusqlite::Result<Option<UserRecord>> {
-    conn.query_row(
-        "SELECT id, email, password_hash, salt, role, COALESCE(must_change_password, 0), COALESCE(is_verified, 1) FROM users WHERE email = ?1",
-        params![email],
-        |row| {
-            Ok(UserRecord {
-                id: row.get(0)?,
-                email: row.get(1)?,
-                password_hash: row.get(2)?,
-                salt: row.get(3)?,
-                role: row.get(4)?,
-                must_change_password: row.get::<_, i64>(5)? != 0,
-                is_verified: row.get::<_, i64>(6)? != 0,
-            })
-        },
+async fn fetch_user_by_email(pool: &PgPool, email: &str) -> Result<Option<UserRecord>, sqlx::Error> {
+    sqlx::query_as::<_, UserRecord>(
+        "SELECT id, email, password_hash, salt, role, must_change_password, is_verified FROM users WHERE email = $1",
     )
-    .optional()
+    .bind(email)
+    .fetch_optional(pool)
+    .await
 }
 
 async fn fetch_user_by_id(pool: &PgPool, user_id: &str) -> Result<Option<UserRecord>, sqlx::Error> {
@@ -479,65 +459,75 @@ fn issue_jwt(state: &AppState, user: &UserRecord) -> Result<String, String> {
     .map_err(|e| e.to_string())
 }
 
-fn store_password_reset_token(
-    conn: &Connection,
+async fn store_password_reset_token(
+    pool: &PgPool,
     user_id: &str,
     token: &str,
     expires_at: i64,
-) -> rusqlite::Result<()> {
-    conn.execute(
-        "DELETE FROM password_reset_tokens WHERE user_id = ?1 OR expires_at <= strftime('%s','now')",
-        params![user_id],
-    )?;
-    conn.execute(
-        "INSERT INTO password_reset_tokens(token, user_id, expires_at, created_at, consumed) VALUES (?1, ?2, ?3, strftime('%s','now'), 0)",
-        params![token, user_id, expires_at],
-    )?;
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM password_reset_tokens WHERE user_id = $1 OR expires_at <= EXTRACT(EPOCH FROM NOW())::BIGINT")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO password_reset_tokens(token, user_id, expires_at, created_at, consumed) VALUES ($1, $2, $3, EXTRACT(EPOCH FROM NOW())::BIGINT, FALSE)")
+        .bind(token)
+        .bind(user_id)
+        .bind(expires_at)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await
+}
+
+async fn mark_token_consumed(pool: &PgPool, token: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM password_reset_tokens WHERE token = $1")
+        .bind(token)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
-fn mark_token_consumed(conn: &Connection, token: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "DELETE FROM password_reset_tokens WHERE token = ?1",
-        params![token],
-    )?;
-    Ok(())
-}
-
-fn store_email_verification_token(
-    conn: &Connection,
+async fn store_email_verification_token(
+    pool: &PgPool,
     user_id: &str,
     token: &str,
     expires_at: i64,
-) -> rusqlite::Result<()> {
-    conn.execute(
-        "DELETE FROM email_verification_tokens WHERE user_id = ?1 OR expires_at <= strftime('%s','now')",
-        params![user_id],
-    )?;
-    conn.execute(
-        "INSERT INTO email_verification_tokens(token, user_id, expires_at, created_at, consumed) VALUES (?1, ?2, ?3, strftime('%s','now'), 0)",
-        params![token, user_id, expires_at],
-    )?;
-    Ok(())
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM email_verification_tokens WHERE user_id = $1 OR expires_at <= EXTRACT(EPOCH FROM NOW())::BIGINT")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO email_verification_tokens(token, user_id, expires_at, created_at, consumed) VALUES ($1, $2, $3, EXTRACT(EPOCH FROM NOW())::BIGINT, FALSE)")
+        .bind(token)
+        .bind(user_id)
+        .bind(expires_at)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await
 }
 
-fn consume_email_verification_token(
-    conn: &Connection,
+async fn consume_email_verification_token(
+    pool: &PgPool,
     token: &str,
-) -> rusqlite::Result<Option<(String, i64)>> {
-    conn.query_row(
-        "SELECT user_id, expires_at FROM email_verification_tokens WHERE token = ?1",
-        params![token],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )
-    .optional()
+) -> Result<Option<(String, i64)>, sqlx::Error> {
+    let row = sqlx::query("SELECT user_id, expires_at FROM email_verification_tokens WHERE token = $1")
+        .bind(token)
+        .fetch_optional(pool)
+        .await?;
+    
+    if let Some(r) = row {
+        Ok(Some((r.try_get(0)?, r.try_get(1)?)))
+    } else {
+        Ok(None)
+    }
 }
 
-fn delete_email_verification_token(conn: &Connection, token: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "DELETE FROM email_verification_tokens WHERE token = ?1",
-        params![token],
-    )?;
+async fn delete_email_verification_token(pool: &PgPool, token: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM email_verification_tokens WHERE token = $1")
+        .bind(token)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -577,39 +567,46 @@ fn build_verify_link(base: &str, token: &str) -> String {
     )
 }
 
-fn get_setting(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
-    conn.query_row(
-        "SELECT value FROM app_settings WHERE key = ?1",
-        params![key],
-        |row| row.get(0),
-    )
-    .optional()
-}
-
-fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO app_settings(key, value) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![key, value],
-    )?;
-    Ok(())
-}
-
-pub fn load_email_sender(conn: &Connection) -> rusqlite::Result<Option<EmailSenderConfig>> {
-    if let Some(value) = get_setting(conn, EMAIL_SENDER_SETTING_KEY)? {
-        serde_json::from_str(&value)
-            .map(Some)
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))
+async fn get_setting(pool: &PgPool, key: &str) -> Result<Option<String>, sqlx::Error> {
+    let row = sqlx::query("SELECT value FROM app_settings WHERE key = $1")
+        .bind(key)
+        .fetch_optional(pool)
+        .await?;
+    
+    if let Some(r) = row {
+         Ok(Some(r.try_get::<serde_json::Value, _>(0)?.to_string()))
     } else {
         Ok(None)
     }
 }
 
-pub fn save_email_sender(conn: &Connection, sender: &EmailSenderConfig) -> rusqlite::Result<()> {
-    let value = serde_json::to_string(sender).map_err(|e| {
-        rusqlite::Error::ToSqlConversionFailure(Box::new(e))
-    })?;
-    set_setting(conn, EMAIL_SENDER_SETTING_KEY, &value)
+async fn set_setting(pool: &PgPool, key: &str, value: &str) -> Result<(), sqlx::Error> {
+    // Note: value is JSONB in DB but we pass string here, so we cast
+    sqlx::query("INSERT INTO app_settings(key, value) VALUES ($1, $2::jsonb) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .bind(key)
+        .bind(value)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn load_email_sender(pool: &PgPool) -> Result<Option<EmailSenderConfig>, anyhow::Error> {
+    if let Some(value_str) = get_setting(pool, EMAIL_SENDER_SETTING_KEY).await? {
+        // value_str is already a JSON string from get_setting (if we implemented it to return string)
+        // But wait, get_setting in my previous chunk returns stringified JSON if it's JSONB.
+        // Actually, let's fix get_setting to return serde_json::Value or handle the casting.
+        // For now, assume get_setting returns the raw JSON string or we parse it.
+        // Re-reading get_setting replacement: it reads try_get::<serde_json::Value> and to_string(). 
+        // So it returns a JSON string.
+        serde_json::from_str(&value_str).map(Some).map_err(|e| e.into())
+    } else {
+        Ok(None)
+    }
+}
+
+pub async fn save_email_sender(pool: &PgPool, sender: &EmailSenderConfig) -> Result<(), anyhow::Error> {
+    let value = serde_json::to_string(sender)?;
+    set_setting(pool, EMAIL_SENDER_SETTING_KEY, &value).await.map_err(|e| e.into())
 }
 
 async fn current_email_sender(state: &AppState) -> Option<EmailSenderConfig> {
@@ -1295,32 +1292,19 @@ pub async fn admin_delete_item_with_kind(
 ) -> impl IntoResponse {
     
     let code_to_delete = code;
-    let kind_to_delete = Some(kind);
+    let kind_to_delete = kind;
 
-    // Query needed info inside a short-lived DB connection
-    let items_to_delete: Vec<(String, String)> = {
-        let conn = Connection::open(&state.db_path).unwrap();
-        if let Some(kind) = &kind_to_delete {
-            conn.prepare("SELECT kind, value FROM items WHERE code = ?1 AND kind = ?2")
-                .and_then(|mut stmt| {
-                    stmt.query_map(params![code_to_delete, kind], |r| {
-                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-                    })
-                    .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
-                })
-                .unwrap_or_default()
-        } else {
-            // If no kind specified, get all items with this code (for backward compatibility)
-            conn.prepare("SELECT kind, value FROM items WHERE code = ?1")
-                .and_then(|mut stmt| {
-                    stmt.query_map(params![code_to_delete], |r| {
-                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-                    })
-                    .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
-                })
-                .unwrap_or_default()
-        }
-    };
+    // Query needed info
+    let items_to_delete: Vec<(String, String)> = 
+        sqlx::query("SELECT kind, value FROM items WHERE code = $1 AND kind = $2")
+            .bind(&code_to_delete)
+            .bind(&kind_to_delete)
+            .fetch_all(&state.pool)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| (r.get(0), r.get(1)))
+            .collect();
 
     // Delete associated files for file items
     for (kind, value) in &items_to_delete {
@@ -1335,19 +1319,17 @@ pub async fn admin_delete_item_with_kind(
         }
     }
 
-    // Now delete the DB row(s) in a fresh connection
-    {
-        let conn = Connection::open(&state.db_path).unwrap();
-        if let Some(kind) = &kind_to_delete {
-            let _ = conn.execute("DELETE FROM items WHERE code = ?1 AND kind = ?2", params![code_to_delete, kind]);
-        } else {
-            // Delete all items with this code (backward compatibility)
-            let _ = conn.execute("DELETE FROM items WHERE code = ?1", params![code_to_delete]);
-        }
-    }
+    // Now delete the DB row(s)
+    let _ = sqlx::query("DELETE FROM items WHERE code = $1 AND kind = $2")
+        .bind(&code_to_delete)
+        .bind(&kind_to_delete)
+        .execute(&state.pool)
+        .await;
+        
     (StatusCode::OK, Json(serde_json::json!({"success": true}))).into_response()
 }
 
+#[debug_handler]
 #[debug_handler]
 pub async fn admin_delete_item(
     State(state): State<AppState>,
@@ -1355,21 +1337,18 @@ pub async fn admin_delete_item(
     AdminUser(_): AdminUser,
 ) -> impl IntoResponse {
     
-    // For backward compatibility, delete all items with this code
     let code_to_delete = code;
 
-    // Query needed info inside a short-lived DB connection
-    let items_to_delete: Vec<(String, String)> = {
-        let conn = Connection::open(&state.db_path).unwrap();
-        conn.prepare("SELECT kind, value FROM items WHERE code = ?1")
-            .and_then(|mut stmt| {
-                stmt.query_map(params![code_to_delete], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-                })
-                .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
-            })
+    // Query needed info
+    let items_to_delete: Vec<(String, String)> = 
+        sqlx::query("SELECT kind, value FROM items WHERE code = $1")
+            .bind(&code_to_delete)
+            .fetch_all(&state.pool)
+            .await
             .unwrap_or_default()
-    };
+            .into_iter()
+            .map(|r| (r.get(0), r.get(1)))
+            .collect();
 
     // Delete associated files for file items
     for (kind, value) in &items_to_delete {
@@ -1384,11 +1363,12 @@ pub async fn admin_delete_item(
         }
     }
 
-    // Now delete the DB row(s) in a fresh connection
-    {
-        let conn = Connection::open(&state.db_path).unwrap();
-        let _ = conn.execute("DELETE FROM items WHERE code = ?1", params![code_to_delete]);
-    }
+    // Now delete the DB row(s)
+    let _ = sqlx::query("DELETE FROM items WHERE code = $1")
+        .bind(&code_to_delete)
+        .execute(&state.pool)
+        .await;
+
     (StatusCode::OK, Json(serde_json::json!({"success": true}))).into_response()
 }
 
@@ -1787,7 +1767,7 @@ pub async fn api_notepad(State(state): State<AppState>, headers: HeaderMap, mut 
         _ => None,
     };
 
-    let code = match save_item(&state.db_path, custom_code.as_ref(), "notepad", &content, user_id.as_deref()) {
+    let code = match save_item(&state.pool, custom_code.as_ref(), "notepad", &content, user_id.as_deref()).await {
         Ok(c) => c,
         Err(SaveItemError::CodeExists) => {
             return (
@@ -1815,30 +1795,16 @@ pub async fn api_notepad(State(state): State<AppState>, headers: HeaderMap, mut 
 }
 
 pub async fn notepad_handler(State(state): State<AppState>, Path(code): Path<String>) -> axum::response::Response {
-    let value = {
-        let conn = match Connection::open(&state.db_path) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Failed to open database: {}", e);
-                return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
-            }
-        };
-        let mut stmt = match conn.prepare("SELECT value FROM items WHERE code = ?1 AND kind = ?2") {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("Failed to prepare statement: {}", e);
-                return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
-            }
-        };
-        match stmt.query_row(params![code.clone(), "notepad"], |r| r.get::<_, String>(0)) {
-            Ok(v) => v,
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                return (StatusCode::NOT_FOUND, "Not found").into_response();
-            }
-            Err(e) => {
-                tracing::error!("Database query error: {}", e);
-                return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
-            }
+    let value = match sqlx::query("SELECT value FROM items WHERE code = $1 AND kind = 'notepad'")
+        .bind(&code)
+        .fetch_optional(&state.pool)
+        .await
+    {
+        Ok(Some(row)) => row.get::<String, _>(0),
+        Ok(None) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(e) => {
+            tracing::error!("Database query error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
         }
     };
 
@@ -1916,18 +1882,7 @@ pub async fn login(State(state): State<AppState>, Json(payload): Json<LoginReque
         }
     };
 
-    let conn = match Connection::open(&state.db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to open database: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Database error"})),
-            );
-        }
-    };
-
-    let user = match fetch_user_by_email(&conn, &email) {
+    let user = match fetch_user_by_email(&state.pool, &email).await {
         Ok(Some(user)) => user,
         Ok(None) => {
             return (
@@ -2039,18 +1994,7 @@ pub async fn register(State(state): State<AppState>, Json(payload): Json<Registe
         );
     }
 
-    let conn = match Connection::open(&state.db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to open database: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Database error"})),
-            );
-        }
-    };
-
-    if let Ok(Some(_)) = fetch_user_by_email(&conn, &email) {
+    if let Ok(Some(_)) = fetch_user_by_email(&state.pool, &email).await {
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": "Email already registered"})),
@@ -2061,18 +2005,27 @@ pub async fn register(State(state): State<AppState>, Json(payload): Json<Registe
     let salt = generate_token(32);
     let password_hash = hash_with_salt(&payload.password, &salt);
     let created_at = Utc::now().timestamp();
-    match conn.execute(
-        "INSERT INTO users(id, email, password_hash, salt, role, must_change_password, created_at, is_verified) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, 0)",
-        params![user_id, email.clone(), password_hash, salt, "user", created_at],
-    ) {
+    
+    match sqlx::query(
+        "INSERT INTO users(id, email, password_hash, salt, role, must_change_password, created_at, is_verified) VALUES ($1, $2, $3, $4, $5, FALSE, $6, FALSE)",
+    )
+    .bind(&user_id)
+    .bind(&email)
+    .bind(&password_hash)
+    .bind(&salt)
+    .bind("user")
+    .bind(created_at)
+    .execute(&state.pool)
+    .await
+    {
         Ok(_) => {}
-        Err(SqliteError::SqliteFailure(err, _)) if err.code == ErrorCode::ConstraintViolation => {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({"error": "Email already registered"})),
-            )
-        }
         Err(e) => {
+             if e.to_string().contains("duplicate key") {
+                 return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({"error": "Email already registered"})),
+                );
+             }
             tracing::error!("Failed to insert user: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -2087,7 +2040,7 @@ pub async fn register(State(state): State<AppState>, Json(payload): Json<Registe
         .unwrap_or_else(|| Utc::now())
         .timestamp();
 
-    if let Err(e) = store_email_verification_token(&conn, &user_id, &verify_token, verify_expires) {
+    if let Err(e) = store_email_verification_token(&state.pool, &user_id, &verify_token, verify_expires).await {
         tracing::error!("Failed to store verification token: {}", e);
     } else {
         let verify_link = build_verify_link(&state.verification_base_url, &verify_token);
@@ -2109,23 +2062,12 @@ pub async fn user_items(State(state): State<AppState>, user: AuthUser) -> impl I
     if let Err(resp) = ensure_password_current(&user) {
         return resp;
     }
-    let conn = match Connection::open(&state.db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to open database: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database error"}))).into_response();
-        }
-    };
     
-    let mut stmt = match conn.prepare("SELECT code, kind, value, created_at FROM items WHERE user_id = ?1 ORDER BY created_at DESC") {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("Failed to prepare statement: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Query error"}))).into_response();
-        }
-    };
-    
-    let rows = match stmt.query_map(params![user.id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?))) {
+    let rows = match sqlx::query("SELECT code, kind, value, created_at FROM items WHERE user_id = $1 ORDER BY created_at DESC")
+        .bind(&user.id)
+        .fetch_all(&state.pool)
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("Failed to query items: {}", e);
@@ -2135,20 +2077,23 @@ pub async fn user_items(State(state): State<AppState>, user: AuthUser) -> impl I
     
     let mut items: Vec<serde_json::Value> = Vec::new();
     for row in rows {
-        if let Ok((code, kind, value, created_at)) = row {
-            let short_url = match kind.as_str() {
-                "url" | "file" => format!("{}/s/{}", state.base_url, code),
-                "notepad" => format!("{}/n/{}", state.base_url, code),
-                _ => format!("{}/r/{}", state.base_url, code),
-            };
-            items.push(serde_json::json!({
-                "code": code,
-                "kind": kind,
-                "value": value,
-                "created_at": created_at,
-                "short_url": short_url
-            }));
-        }
+        let code: String = row.get(0);
+        let kind: String = row.get(1);
+        let value: String = row.get(2);
+        let created_at: i64 = row.get(3);
+
+        let short_url = match kind.as_str() {
+            "url" | "file" => format!("{}/s/{}", state.base_url, code),
+            "notepad" => format!("{}/n/{}", state.base_url, code),
+            _ => format!("{}/r/{}", state.base_url, code),
+        };
+        items.push(serde_json::json!({
+            "code": code,
+            "kind": kind,
+            "value": value,
+            "created_at": created_at,
+            "short_url": short_url
+        }));
     }
     
     (StatusCode::OK, Json(items)).into_response()
@@ -2163,43 +2108,39 @@ pub async fn user_delete_item(
     if let Err(resp) = ensure_password_current(&user) {
         return resp;
     }
-    // Verify ownership
-    let conn = match Connection::open(&state.db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to open database: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database error"}))).into_response();
-        }
-    };
     
     // Check ownership
-    let owner_id: Result<String, _> = conn.query_row(
-        "SELECT user_id FROM items WHERE code = ?1 AND kind = ?2",
-        params![code, kind],
-        |r| r.get(0),
-    );
+    let owner_id_opt: Option<String> = sqlx::query("SELECT user_id FROM items WHERE code = $1 AND kind = $2")
+        .bind(&code)
+        .bind(&kind)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None)
+        .map(|r| r.get(0));
     
-    match owner_id {
-        Ok(uid) if uid == user.id => {
-            // User owns this item, proceed with deletion
+    match owner_id_opt {
+        Some(uid) if uid == user.id => {
+            // User owns this item, proceed
         }
-        Ok(_) => {
+        Some(_) => {
             return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Not authorized"}))).into_response();
         }
-        Err(_) => {
+        None => {
             return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Item not found"}))).into_response();
         }
     }
     
     // Get item info for file deletion
-    let item_info: Result<(String,), _> = conn.query_row(
-        "SELECT value FROM items WHERE code = ?1 AND kind = ?2",
-        params![code, kind],
-        |r| Ok((r.get::<_, String>(0)?,)),
-    );
+    let value_opt: Option<String> = sqlx::query("SELECT value FROM items WHERE code = $1 AND kind = $2")
+        .bind(&code)
+        .bind(&kind)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None)
+        .map(|r| r.get(0));
     
     // Delete associated files
-    if let Ok((value,)) = item_info {
+    if let Some(value) = value_opt {
         if kind == "file" {
             if let Some(fname) = value.strip_prefix("file:") {
                 let path_to_delete = std::path::PathBuf::from(&state.uploads_dir).join(fname);
@@ -2212,7 +2153,12 @@ pub async fn user_delete_item(
     }
     
     // Delete from database
-    match conn.execute("DELETE FROM items WHERE code = ?1 AND kind = ?2", params![code, kind]) {
+    match sqlx::query("DELETE FROM items WHERE code = $1 AND kind = $2")
+        .bind(&code)
+        .bind(&kind)
+        .execute(&state.pool)
+        .await 
+    {
         Ok(_) => (StatusCode::OK, Json(serde_json::json!({"success": true}))).into_response(),
         Err(e) => {
             tracing::error!("Failed to delete item: {}", e);
@@ -2336,30 +2282,24 @@ pub async fn user_update_item(
     if let Err(resp) = ensure_password_current(&user) {
         return resp;
     }
-    // Verify ownership
-    let conn = match Connection::open(&state.db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to open database: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database error"}))).into_response();
-        }
-    };
     
     // Check ownership
-    let owner_id: Result<String, _> = conn.query_row(
-        "SELECT user_id FROM items WHERE code = ?1 AND kind = ?2",
-        params![code, kind],
-        |r| r.get(0),
-    );
+    let owner_id_opt: Option<String> = sqlx::query("SELECT user_id FROM items WHERE code = $1 AND kind = $2")
+        .bind(&code)
+        .bind(&kind)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None)
+        .map(|r| r.get(0));
     
-    match owner_id {
-        Ok(uid) if uid == user.id => {
+    match owner_id_opt {
+        Some(uid) if uid == user.id => {
             // User owns this item, proceed
         }
-        Ok(_) => {
+        Some(_) => {
             return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Not authorized"}))).into_response();
         }
-        Err(_) => {
+        None => {
             return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Item not found"}))).into_response();
         }
     }
@@ -2374,15 +2314,18 @@ pub async fn user_update_item(
         };
         
         // Check if new code already exists
-        if code_exists_for_kind(&state.db_path, &normalized, &kind) {
+        if code_exists_for_kind(&state.pool, &normalized, &kind).await {
             return (StatusCode::CONFLICT, Json(serde_json::json!({"error": "Code already exists"}))).into_response();
         }
         
         // Update the code
-        match conn.execute(
-            "UPDATE items SET code = ?1 WHERE code = ?2 AND kind = ?3",
-            params![normalized, code, kind],
-        ) {
+        match sqlx::query("UPDATE items SET code = $1 WHERE code = $2 AND kind = $3")
+            .bind(&normalized)
+            .bind(&code)
+            .bind(&kind)
+            .execute(&state.pool)
+            .await 
+        {
             Ok(_) => {
                 let short_url = match kind.as_str() {
                     "url" | "file" => format!("{}/s/{}", state.base_url, normalized),
@@ -2443,25 +2386,14 @@ pub async fn request_password_reset(
         }
     };
 
-    let conn = match Connection::open(&state.db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to open database: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Database error"})),
-            );
-        }
-    };
-
-    if let Ok(Some(user)) = fetch_user_by_email(&conn, &email) {
+    if let Ok(Some(user)) = fetch_user_by_email(&state.pool, &email).await {
         let token = generate_token(48);
         let expires_at = Utc::now()
             .checked_add_signed(Duration::minutes(PASSWORD_RESET_TOKEN_TTL_MINUTES))
             .map(|ts| ts.timestamp())
             .unwrap_or_else(|| Utc::now().timestamp());
 
-        if let Err(e) = store_password_reset_token(&conn, &user.id, &token, expires_at) {
+        if let Err(e) = store_password_reset_token(&state.pool, &user.id, &token, expires_at).await {
             tracing::error!("Failed to store password reset token: {}", e);
         } else {
             let reset_link = build_reset_link(&state.password_reset_base_url, &token);
@@ -2521,32 +2453,16 @@ pub async fn confirm_password_reset(
         );
     }
 
-    let conn = match Connection::open(&state.db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to open database: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Database error"})),
-            );
-        }
-    };
-
-    let token_row = conn
-        .query_row(
-            "SELECT user_id, expires_at FROM password_reset_tokens WHERE token = ?1",
-            params![payload.token],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                ))
-            },
-        )
-        .optional();
+    let token_row = sqlx::query("SELECT user_id, expires_at FROM password_reset_tokens WHERE token = $1")
+        .bind(&payload.token)
+        .fetch_optional(&state.pool)
+        .await;
 
     let (user_id, expires_at) = match token_row {
-        Ok(Some(data)) => data,
+        Ok(Some(row)) => (
+            row.get::<String, _>(0),
+            row.get::<i64, _>(1),
+        ),
         Ok(None) => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -2563,15 +2479,15 @@ pub async fn confirm_password_reset(
     };
 
     if expires_at < Utc::now().timestamp() {
-        let _ = mark_token_consumed(&conn, &payload.token);
+        let _ = mark_token_consumed(&state.pool, &payload.token).await;
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Token expired"})),
         );
     }
 
-    let Some(mut user) = fetch_user_by_id(&conn, &user_id).unwrap_or(None) else {
-        let _ = mark_token_consumed(&conn, &payload.token);
+    let Some(mut user) = fetch_user_by_id(&state.pool, &user_id).await.unwrap_or(None) else {
+        let _ = mark_token_consumed(&state.pool, &payload.token).await;
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "User no longer exists"})),
@@ -2581,17 +2497,18 @@ pub async fn confirm_password_reset(
     let new_salt = generate_token(32);
     let new_hash = hash_with_salt(&payload.new_password, &new_salt);
 
-    match conn.execute(
-        "UPDATE users SET password_hash = ?1, salt = ?2, must_change_password = 0 WHERE id = ?3",
-        params![new_hash, new_salt, user.id],
-    ) {
+    match sqlx::query("UPDATE users SET password_hash = $1, salt = $2, must_change_password = FALSE WHERE id = $3")
+        .bind(new_hash)
+        .bind(new_salt)
+        .bind(user.id)
+        .execute(&state.pool)
+        .await
+    {
         Ok(_) => {
-            let _ = mark_token_consumed(&conn, &payload.token);
-            user.salt = new_salt;
-            user.password_hash = new_hash;
+            let _ = mark_token_consumed(&state.pool, &payload.token).await;
             (
                 StatusCode::OK,
-                Json(serde_json::json!({"message": "Password reset successful"})),
+                Json(serde_json::json!({"message": "Password updated successfully"})),
             )
         }
         Err(e) => {
@@ -2837,18 +2754,7 @@ pub async fn admin_set_email_sender(
         via_display: payload.via_display,
     };
 
-    let conn = match Connection::open(&state.db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to open database: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Database error"})),
-            );
-        }
-    };
-
-    if let Err(e) = save_email_sender(&conn, &config) {
+    if let Err(e) = save_email_sender(&state.pool, &config).await {
         tracing::error!("Failed to save sender config: {}", e);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -2871,68 +2777,25 @@ pub async fn admin_set_email_sender(
 }
 
 pub async fn admin_list_users(State(state): State<AppState>, AdminUser(_): AdminUser) -> impl IntoResponse {
-    let conn = match Connection::open(&state.db_path) {
-        Ok(c) => c,
+    let users = match sqlx::query_as::<_, AdminUserSummary>(
+        "SELECT id, email, role, must_change_password, created_at FROM users ORDER BY created_at DESC"
+    )
+    .fetch_all(&state.pool)
+    .await {
+        Ok(users) => users,
         Err(e) => {
-            tracing::error!("Failed to open database: {}", e);
+            tracing::error!("Failed to fetch users: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Database error"})),
-            );
+            ).into_response();
         }
     };
-
-    let mut stmt = match conn.prepare(
-        "SELECT id, email, role, COALESCE(must_change_password, 0), COALESCE(created_at, strftime('%s','now')) \
-         FROM users ORDER BY created_at DESC",
-    ) {
-        Ok(stmt) => stmt,
-        Err(e) => {
-            tracing::error!("Failed to prepare user query: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Database error"})),
-            );
-        }
-    };
-
-    let users_iter = match stmt.query_map([], |row| {
-        Ok(AdminUserSummary {
-            id: row.get(0)?,
-            email: row.get(1)?,
-            role: row.get(2)?,
-            must_change_password: row.get::<_, i64>(3)? != 0,
-            created_at: row.get::<_, i64>(4)?,
-        })
-    }) {
-        Ok(iter) => iter,
-        Err(e) => {
-            tracing::error!("Failed to iterate users: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Database error"})),
-            );
-        }
-    };
-
-    let mut users = Vec::new();
-    for user in users_iter {
-        match user {
-            Ok(u) => users.push(u),
-        Err(e) => {
-                tracing::error!("Failed to read user row: {}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": "Database error"})),
-                );
-            }
-        }
-    }
 
     (
         StatusCode::OK,
         Json(serde_json::json!(users)),
-    )
+    ).into_response()
 }
 
 pub async fn admin_create_user(
@@ -2970,18 +2833,7 @@ pub async fn admin_create_user(
         );
     }
 
-    let conn = match Connection::open(&state.db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to open database: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Database error"})),
-            );
-        }
-    };
-
-    if let Ok(Some(_)) = fetch_user_by_email(&conn, &email) {
+    if let Ok(Some(_)) = fetch_user_by_email(&state.pool, &email).await {
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": "Email already exists"})),
@@ -2993,11 +2845,19 @@ pub async fn admin_create_user(
     let user_id = Uuid::new_v4().to_string();
     let created_at = Utc::now().timestamp();
 
-    match conn.execute(
+    match sqlx::query(
         "INSERT INTO users(id, email, password_hash, salt, role, must_change_password, created_at, is_verified) \
-         VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, 1)",
-        params![user_id, email, password_hash, salt, role, created_at],
-    ) {
+         VALUES ($1, $2, $3, $4, $5, TRUE, $6, TRUE)",
+    )
+    .bind(&user_id)
+    .bind(&email)
+    .bind(password_hash)
+    .bind(salt)
+    .bind(&role)
+    .bind(created_at)
+    .execute(&state.pool)
+    .await
+    {
         Ok(_) => (
             StatusCode::CREATED,
             Json(serde_json::json!(AdminUserSummary {
@@ -3031,18 +2891,7 @@ pub async fn admin_update_user(
         );
     }
 
-    let conn = match Connection::open(&state.db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to open database: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Database error"})),
-            );
-        }
-    };
-
-    let Some(mut user) = fetch_user_by_id(&conn, &user_id).unwrap_or(None) else {
+    let Some(mut user) = fetch_user_by_id(&state.pool, &user_id).await.unwrap_or(None) else {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "User not found"})),
@@ -3063,10 +2912,12 @@ pub async fn admin_update_user(
                 Json(serde_json::json!({"error": "Invalid role"})),
             );
         }
-        if let Err(e) = conn.execute(
-            "UPDATE users SET role = ?1 WHERE id = ?2",
-            params![role, &user.id],
-        ) {
+        if let Err(e) = sqlx::query("UPDATE users SET role = $1 WHERE id = $2")
+            .bind(role)
+            .bind(&user.id)
+            .execute(&state.pool)
+            .await 
+        {
             tracing::error!("Failed to update role: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -3077,10 +2928,12 @@ pub async fn admin_update_user(
     }
 
     if let Some(flag) = payload.must_change_password {
-        if let Err(e) = conn.execute(
-            "UPDATE users SET must_change_password = ?1 WHERE id = ?2",
-            params![flag as i64, &user.id],
-        ) {
+        if let Err(e) = sqlx::query("UPDATE users SET must_change_password = $1 WHERE id = $2")
+            .bind(flag)
+            .bind(&user.id)
+            .execute(&state.pool)
+            .await
+        {
             tracing::error!("Failed to update must_change_password: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -3099,10 +2952,13 @@ pub async fn admin_update_user(
         }
         let new_salt = generate_token(32);
         let new_hash = hash_with_salt(password, &new_salt);
-        if let Err(e) = conn.execute(
-            "UPDATE users SET password_hash = ?1, salt = ?2, must_change_password = 0 WHERE id = ?3",
-            params![new_hash, new_salt, &user.id],
-        ) {
+        if let Err(e) = sqlx::query("UPDATE users SET password_hash = $1, salt = $2, must_change_password = FALSE WHERE id = $3")
+            .bind(&new_hash)
+            .bind(&new_salt)
+            .bind(&user.id)
+            .execute(&state.pool)
+            .await
+        {
             tracing::error!("Failed to update password: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -3114,13 +2970,13 @@ pub async fn admin_update_user(
         user.must_change_password = false;
     }
 
-    let created_at = conn
-        .query_row(
-            "SELECT COALESCE(created_at, strftime('%s','now')) FROM users WHERE id = ?1",
-            params![&user.id],
-            |row| row.get(0),
-        )
-        .unwrap_or_else(|_| Utc::now().timestamp());
+    let created_at = sqlx::query("SELECT EXTRACT(EPOCH FROM created_at)::BIGINT FROM users WHERE id = $1")
+        .bind(&user.id)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None)
+        .and_then(|r| r.get(0))
+        .unwrap_or_else(|| Utc::now().timestamp());
 
     (
         StatusCode::OK,
@@ -3146,19 +3002,12 @@ pub async fn admin_delete_user(
         );
     }
 
-    let conn = match Connection::open(&state.db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to open database: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Database error"})),
-            );
-        }
-    };
-
-    match conn.execute("DELETE FROM users WHERE id = ?1", params![user_id]) {
-        Ok(affected) if affected > 0 => (
+    match sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(&user_id)
+        .execute(&state.pool)
+        .await
+    {
+        Ok(result) if result.rows_affected() > 0 => (
             StatusCode::OK,
             Json(serde_json::json!({"success": true})),
         ),
