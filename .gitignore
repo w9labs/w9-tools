@@ -24,3 +24,21 @@ Cargo.lock
 
 # Local guides
 guide.md
+
+# Docker
+*.pid
+*.sock
+
+# Old backups
+*.old/
+*.old.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~

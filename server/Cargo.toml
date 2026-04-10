@@ -1,37 +1,17 @@
 [package]
-name = "w9"
+name = "w9-tools-server"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-axum = { version = "0.7.9", features = ["macros", "multipart", "form", "json"] }
-tokio = { version = "1", features = ["full"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-qrcode = "0.12"
-uuid = { version = "1", features = ["v4"] }
-anyhow = "1.0"
-tower-http = { version = "0.5.2", features = ["fs", "cors", "limit"] }
-tracing = "0.1"
-tracing-subscriber = "0.3"
-askama = "0.12"
-sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "postgres", "uuid", "chrono", "json"] }
-nanoid = "0.4"
-mime_guess = "2.0"
-image = { version = "0.24", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-base64 = "0.21"
-urlencoding = "2.1"
-sha2 = "0.10"
-rand = "0.8"
-hex = "0.4"
-axum-extra = { version = "0.9", features = ["typed-header"] }
-pulldown-cmark = "0.9"
-regex = "1.10"
-html-escape = "0.2"
-jsonwebtoken = "9"
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
-reqwest = { version = "0.11", features = ["json"] }
-home = "=0.5.9"
-async-lock = "=3.4.0"
-base64ct = "=1.6.0"
-
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dotenvy = { workspace = true }
+anyhow = { workspace = true }

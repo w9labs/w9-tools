@@ -1,135 +1,141 @@
-name: Build and Push Docker Images
+name: Docker Build
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+    paths:
+      - 'server/**'
+      - 'client/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'Dockerfile'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - 'client/**'
+      - 'Cargo.toml'
+      - 'Dockerfile'
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-images:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Backend
-          - service: backend
-            runner: ubuntu-latest
-            platform: linux/amd64
-            tag_suffix: -amd64
-            context: .
-            file: ./server/Dockerfile.build
-            image_name: w9-tools-backend
-          - service: backend
-            runner: ubuntu-24.04-arm
-            platform: linux/arm64
-            tag_suffix: -arm64
-            context: .
-            file: ./server/Dockerfile.build
-            image_name: w9-tools-backend
-          # Frontend
-          - service: frontend
-            runner: ubuntu-latest
-            platform: linux/amd64
-            tag_suffix: -amd64
-            context: ./frontend
-            file: ./frontend/Dockerfile.build
-            image_name: w9-tools-frontend
-          - service: frontend
-            runner: ubuntu-24.04-arm
-            platform: linux/arm64
-            tag_suffix: -arm64
-            context: ./frontend
-            file: ./frontend/Dockerfile.build
-            image_name: w9-tools-frontend
-    
-    runs-on: ${{ matrix.runner }}
+  build-amd64:
+    name: Build AMD64
+    runs-on: ubuntu-latest
+
     permissions:
       contents: read
       packages: write
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Downcase Image Name
-        run: |
-          REPO_OWNER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')
-          echo "FULL_IMAGE_NAME=${{ env.REGISTRY }}/${REPO_OWNER}/${{ matrix.image_name }}" >> $GITHUB_ENV
 
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.FULL_IMAGE_NAME }}
-          tags: type=sha,format=short
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=amd64-
+            type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
 
       - name: Build and push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.file }}
-          push: true
-          platforms: ${{ matrix.platform }}
-          tags: ${{ env.FULL_IMAGE_NAME }}:${{ github.sha }}${{ matrix.tag_suffix }}
+          context: .
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  merge-manifests:
-    needs: build-images
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        service: [backend, frontend]
-        include:
-          - service: backend
-            image_name: w9-tools-backend
-          - service: frontend
-            image_name: w9-tools-frontend
-    
+  build-arm64:
+    name: Build ARM64
+    runs-on: ubuntu-24.04-arm
+
     permissions:
       contents: read
       packages: write
+
     steps:
-      - name: Log in to GitHub Container Registry
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Downcase Image Name
-        run: |
-          REPO_OWNER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')
-          echo "FULL_IMAGE_NAME=${{ env.REGISTRY }}/${REPO_OWNER}/${{ matrix.image_name }}" >> $GITHUB_ENV
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=arm64-
+            type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
 
-      - name: Create and push manifest list
-        run: |
-          IMAGE="${{ env.FULL_IMAGE_NAME }}"
-          SHA="${{ github.sha }}"
-          
-          # Create manifest for SHA tag
-          docker buildx imagetools create -t "${IMAGE}:${SHA}" \
-            "${IMAGE}:${SHA}-amd64" \
-            "${IMAGE}:${SHA}-arm64"
-          
-          # If on main branch, also tag as latest
-          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            docker buildx imagetools create -t "${IMAGE}:latest" \
-              "${IMAGE}:${SHA}-amd64" \
-              "${IMAGE}:${SHA}-arm64"
-          fi
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  merge-manifest:
+    name: Merge Multi-Arch Manifest
+    needs: [build-amd64, build-arm64]
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push manifest
+        uses: int128/docker-manifest-create-action@v2
+        with:
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          sources: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:amd64-${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:arm64-${{ github.sha }}

@@ -1,57 +1,70 @@
 version: '3.8'
 
 services:
-  # W9 Tools Backend
-  w9-tools-backend:
-    image: ghcr.io/${GITHUB_USER:-your-username}/w9-tools-backend:latest
-    container_name: w9-tools-backend
+  w9-tools:
+    image: ghcr.io/w9labs/w9-tools:latest
+    container_name: w9-tools
     restart: unless-stopped
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.w9-tools.rule=Host(`tools.w9.nu`)"
+      - "traefik.http.routers.w9-tools.entrypoints=websecure"
+      - "traefik.http.routers.w9-tools.tls=true"
+      - "traefik.http.services.w9-tools.loadbalancer.server.port=8080"
     ports:
       - "${W9_TOOLS_PORT:-10105}:8080"
     environment:
       - HOST=0.0.0.0
       - PORT=8080
       - BASE_URL=${W9_TOOLS_BASE_URL:-https://tools.w9.nu}
-      - DATABASE_PATH=/app/data/w9.db
-      - DATABASE_URL=postgres://${POSTGRES_USER:-w9admin}:${POSTGRES_PASSWORD:-securepassword}@${POSTGRES_HOST:-w9-db-postgres}:5432/${POSTGRES_DB:-w9labs}
+      - DATABASE_URL=${DATABASE_URL:-sqlite:/app/data/w9-tools.db}
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - ISSUER_URL=${W9_DB_ISSUER_URL:-https://db.w9.nu}
+      - W9_DB_API_URL=${W9_DB_API_URL:-https://db.w9.nu}
+      - W9_DB_API_TOKEN=${W9_DB_API_TOKEN:-}
       - UPLOADS_DIR=/app/uploads
+      - QR_LOGO_PATH=${QR_LOGO_PATH:-}
+      - TURNSTILE_SECRET_KEY=${W9_TOOLS_TURNSTILE_SECRET:-}
+      - EMAIL_FROM_ADDRESS=${W9_TOOLS_EMAIL_FROM:-W9 Tools <no-reply@tools.w9.nu>}
+      - PASSWORD_RESET_BASE_URL=${W9_TOOLS_PASSWORD_RESET_URL:-https://tools.w9.nu/reset-password}
+      - VERIFICATION_BASE_URL=${W9_TOOLS_VERIFICATION_URL:-https://tools.w9.nu/verify}
       - W9_MAIL_API_URL=${W9_MAIL_API_URL:-https://w9.nu}
       - W9_MAIL_API_TOKEN=${W9_MAIL_API_TOKEN:-}
-      - JWT_SECRET=${JWT_SECRET:-}
-      - EMAIL_FROM_ADDRESS=${W9_TOOLS_EMAIL_FROM:-W9 Tools <no-reply@tools.w9.nu>}
-      - PASSWORD_RESET_BASE_URL=${W9_TOOLS_PASSWORD_RESET_URL:-${W9_TOOLS_BASE_URL:-https://tools.w9.nu}/reset-password}
-      - VERIFICATION_BASE_URL=${W9_TOOLS_VERIFICATION_URL:-${W9_TOOLS_BASE_URL:-https://tools.w9.nu}/verify}
-      - TURNSTILE_SECRET_KEY=${W9_TOOLS_TURNSTILE_SECRET:-}
-      - QR_LOGO_PATH=${QR_LOGO_PATH:-}
-      - DEFAULT_ADMIN_EMAIL=${W9_TOOLS_ADMIN_EMAIL:-}
-      - DEFAULT_ADMIN_PASSWORD=${W9_TOOLS_ADMIN_PASSWORD:-}
     volumes:
       - w9-tools-data:/app/data
       - w9-tools-uploads:/app/uploads
     networks:
       - w9-network
+    depends_on:
+      - w9-db
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 30s
 
-  # W9 Tools Frontend
-  w9-tools-frontend:
-    image: ghcr.io/${GITHUB_USER:-your-username}/w9-tools-frontend:latest
-    container_name: w9-tools-frontend
+  # w9-db dependency (OAuth provider)
+  # Point to an external w9-db instance; configure via env vars above.
+  w9-db:
+    image: ghcr.io/w9labs/w9-db:latest
+    container_name: w9-tools-w9-db
     restart: unless-stopped
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "traefik.enable=false"
     ports:
-      - "${W9_TOOLS_FRONTEND_PORT:-8081}:80"
+      - "${W9_DB_PORT:-8082}:8082"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8082
+      - DATABASE_URL=${W9_DB_DATABASE_URL:-sqlite:/app/data/w9.db}
+      - JWT_SECRET=${W9_DB_JWT_SECRET:-change-me-in-production}
+      - ISSUER_URL=${W9_DB_ISSUER_URL:-https://db.w9.nu}
+    volumes:
+      - w9-db-data:/app/data
     networks:
       - w9-network
-    depends_on:
-      - w9-tools-backend
 
   # Watchtower - Auto-update containers
   watchtower:
@@ -65,7 +78,7 @@ services:
       - WATCHTOWER_POLL_INTERVAL=300
       - WATCHTOWER_INCLUDE_STOPPED=true
       - WATCHTOWER_LABEL_ENABLE=true
-    command: --interval 300 --scope w9-tools-backend w9-tools-frontend
+    command: --interval 300 --scope w9-tools --scope w9-tools-w9-db
     networks:
       - w9-network
 
@@ -73,6 +86,8 @@ volumes:
   w9-tools-data:
     driver: local
   w9-tools-uploads:
+    driver: local
+  w9-db-data:
     driver: local
 
 networks:
