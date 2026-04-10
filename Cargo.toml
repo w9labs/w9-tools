@@ -20,3 +20,6 @@ dotenvy = "0.15"
 anyhow = "1"
 qrcode = "0.14"
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Pin time crate to MSRV-compatible version
+time = ">=0.3.20, <0.3.37"
