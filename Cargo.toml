@@ -3,13 +3,14 @@ members = ["server", "client"]
 resolver = "2"
 
 [workspace.dependencies]
-leptos = { version = "0.6", features = ["csr"] }
+leptos = "0.6"
 leptos_meta = "0.6"
 leptos_router = "0.6"
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+surrealdb = { version = "1", features = ["kv-mem"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 tower = "0.5"
@@ -20,6 +21,5 @@ dotenvy = "0.15"
 anyhow = "1"
 qrcode = "0.14"
 image = { version = "0.25", default-features = false, features = ["png"] }
-
-# Pin time crate to MSRV-compatible version
-time = ">=0.3.20, <0.3.37"
+nanoid = "0.4"
+reqwest = { version = "0.11", features = ["json", "multipart"] }
