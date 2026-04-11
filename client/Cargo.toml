@@ -6,9 +6,6 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-version = "0.1.0"
-edition = "2021"
-
 [dependencies]
 leptos = { workspace = true }
 leptos_meta = { workspace = true }
@@ -16,3 +13,5 @@ leptos_router = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Location", "Storage"] }
