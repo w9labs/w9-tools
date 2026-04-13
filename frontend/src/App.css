@@ -48,9 +48,16 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.25em;
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 0.5rem;
+}
+
+.brand img.brand-logo {
+  height: 36px;
+  width: auto;
+  image-rendering: pixelated;
 }
 
 .brand span {

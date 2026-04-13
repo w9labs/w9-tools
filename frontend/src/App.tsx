@@ -191,10 +191,13 @@ function Header() {
       <NetworkBar active="tools" />
       {!isHomepage && (
         <div className="brand">
-          <div>
-            <p className="eyebrow">Developed by W9 Labs</p>
-            <h1>W9 Tools</h1>
-            <span>Fast drops • Short links • Secure notes</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <img src="/w9-logo/wordmark-dark.svg" alt="W9 Labs" className="brand-logo" />
+            <div>
+              <p className="eyebrow">Developed by W9 Labs</p>
+              <h1>W9 Tools</h1>
+              <span>Fast drops • Short links • Secure notes</span>
+            </div>
           </div>
           <div className="pill" style={{ borderColor: token ? '#00ffd0' : undefined, color: token ? '#00ffd0' : undefined }}>
             {token ? 'SIGNED IN' : 'GUEST'}
