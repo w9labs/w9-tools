@@ -870,11 +870,11 @@ async fn main() -> anyhow::Result<()> {
             clicks BIGINT NOT NULL DEFAULT 0,
             expires_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        CREATE INDEX IF NOT EXISTS idx_links_owner ON links(owner_email);
-        CREATE INDEX IF NOT EXISTS idx_links_code ON links(code);",
+        )",
         &[]
     ).await;
+    let _ = client.execute("CREATE INDEX IF NOT EXISTS idx_links_owner ON links(owner_email)", &[]).await;
+    let _ = client.execute("CREATE INDEX IF NOT EXISTS idx_links_code ON links(code)", &[]).await;
     tracing::info!("Database tables initialized: uploads, notes, links");
 
     let state = AppState { db: Arc::new(client), http_client: reqwest::Client::builder().timeout(std::time::Duration::from_secs(10)).build()? };
