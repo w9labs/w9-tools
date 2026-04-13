@@ -24,6 +24,7 @@ use uuid::Uuid;
 
 const CSS: &str = include_str!("../infra/templates/voxel.css");
 const W9_DB_URL: &str = "https://db.w9.nu";
+const W9_LINKS_URL: &str = "https://links.w9.nu";
 const UPLOADS_DIR: &str = "uploads";
 
 #[derive(Clone)]
@@ -32,12 +33,32 @@ pub struct AppState {
     pub http_client: reqwest::Client,
 }
 
+// Role checking
+async fn get_user_role(state: &AppState, token: &str) -> Option<String> {
+    let res = state.http_client.get(format!("{}/api/auth/me", W9_DB_URL))
+        .header("Authorization", format!("Bearer {}", token)).send().await.ok()?;
+    if res.status().is_success() {
+        let json: serde_json::Value = res.json().await.ok()?;
+        json.get("role").and_then(|v| v.as_str()).map(|s| s.to_string())
+    } else {
+        None
+    }
+}
+
+async fn require_admin(jar: &CookieJar, state: &AppState) -> Option<serde_json::Value> {
+    let token = get_session(jar)?;
+    let user = verify_session(state, &token).await?;
+    let role = get_user_role(state, &token).await?;
+    if role == "admin" { Some(user) } else { None }
+}
+
 // Layout helpers
 fn layout(title: &str, body: &str, nav: &str) -> String {
     format!(r#"<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><link rel="icon" type="image/svg+xml" href="/w9-logo/favicon.svg"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>{title} — W9 Tools</title><style>{CSS}</style></head><body><div class="app"><nav class="nav"><div class="nav-inner"><a href="/" class="brand"><img src="/w9-logo/workmark-transparent.svg" alt="W9 Labs"/><span class="brand-text">Tools</span></a><div class="nav-links">{nav}</div></div></nav>{body}<footer class="footer"><img class="footer-logo" src="/w9-logo/workmark-transparent.svg" alt="W9 Labs"/><p>W9 Tools — QR · Converter · Notepad · File Upload</p></footer></div></body></html>"#, title=title, CSS=CSS, nav=nav, body=body)
 }
 fn public_layout(title: &str, body: &str) -> String { layout(title, body, r#"<a href="/login">Login</a>"#) }
-fn user_layout(title: &str, body: &str) -> String { layout(title, body, r#"<a href="/qr">QR</a><a href="/convert">Convert</a><a href="/notepad">Notepad</a><a href="/upload">Upload</a><a href="/logout">Logout</a>"#) }
+fn user_layout(title: &str, body: &str) -> String { layout(title, body, r#"<a href="/qr">QR</a><a href="/convert">Convert</a><a href="/notepad">Notepad</a><a href="/upload">Upload</a><a href="/my-links">My Links</a><a href="/logout">Logout</a>"#) }
+fn admin_layout(title: &str, body: &str) -> String { layout(title, body, r#"<a href="/qr">QR</a><a href="/convert">Convert</a><a href="/notepad">Notepad</a><a href="/upload">Upload</a><a href="/my-links">My Links</a><a href="/admin/links">Admin</a><a href="/logout">Logout</a>"#) }
 
 // Session management via w9-db
 fn set_session(jar: CookieJar, token: String) -> CookieJar {
@@ -151,6 +172,82 @@ fn file_convert_html() -> String {
     user_layout("File Converter", r#"<div class="card" style="max-width:600px;margin:2rem auto"><h1>🔄 Image Converter</h1><p class="text-sm text-muted mb-2">Convert images between PNG, JPG, and WebP formats.</p><form method="POST" action="/file-convert" enctype="multipart/form-data"><label>Upload Image</label><input type="file" name="file" accept="image/*" required/><label>Convert to</label><select name="format"><option value="png">PNG</option><option value="jpg">JPG</option><option value="webp">WebP</option></select><button type="submit" class="btn mt-2" style="width:100%">Convert & Download</button></form></div>"#)
 }
 
+// Link management HTML templates
+fn my_links_html(links: &[serde_json::Value], msg: Option<&str>) -> String {
+    let alert = msg.map(|m| format!(r#"<div class="alert alert--ok">{}</div>"#, m)).unwrap_or_default();
+    let links_html = if links.is_empty() {
+        r#"<div class="card text-center mt-2"><p class="text-muted">No links created yet. Create your first link below!</p></div>"#.to_string()
+    } else {
+        let rows: Vec<String> = links.iter().map(|link| {
+            let code = link.get("code").and_then(|v| v.as_str()).unwrap_or("");
+            let target_url = link.get("target_url").and_then(|v| v.as_str()).unwrap_or("");
+            let title = link.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled");
+            let clicks = link.get("clicks").and_then(|v| v.as_i64()).unwrap_or(0);
+            let created_at = link.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+            let link_id = link.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            format!(r#"<tr><td><a href="https://w9.nu/s/{0}" target="_blank">{0}</a></td><td>{1}</td><td>{2}</td><td>{3}</td><td>{4}</td><td><a href="/my-links/edit/{5}" class="btn btn--sm">Edit</a> <button onclick="deleteLink('{5}')" class="btn btn--sm" style="background:#e74c3c">Delete</button></td></tr>"#,
+                html_escape(code), html_escape(title), html_escape(target_url), clicks, created_at, link_id)
+        }).collect();
+        format!(r#"<div class="card mt-2" style="overflow-x:auto"><table><thead><tr><th>Code</th><th>Title</th><th>Target URL</th><th>Clicks</th><th>Created</th><th>Actions</th></tr></thead><tbody>{}</tbody></table></div>"#, rows.join(""))
+    };
+    user_layout("My Links", &format!(r#"<div class="card" style="max-width:900px;margin:2rem auto"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem"><h1 style="margin:0">🔗 My Links</h1><button onclick="document.getElementById('create-form').style.display='block'" class="btn">+ New Link</button></div>{}{}</div>
+    <div id="create-form" class="card" style="max-width:600px;margin:2rem auto;display:none"><h2>Create New Link</h2><form method="POST" action="/api/links"><label>Target URL</label><input type="text" name="url" required placeholder="https://example.com"/><label>Short Code (optional)</label><input type="text" name="code" placeholder="my-custom-code"/><label>Title (optional)</label><input type="text" name="title" placeholder="My Link"/><label>Expires in (hours, 0=never)</label><input type="number" name="expires_hours" value="0" min="0"/><button type="submit" class="btn mt-2" style="width:100%">Create Link</button></form></div>
+    <script>
+    async function deleteLink(id) {{
+        if (!confirm('Delete this link?')) return;
+        const res = await fetch(`/api/links/${{id}}`, {{ method: 'DELETE' }});
+        if (res.ok) {{ location.reload(); }} else {{ alert('Delete failed'); }}
+    }}
+    </script>"#, alert, links_html))
+}
+
+fn edit_link_html(link: &serde_json::Value) -> String {
+    let code = link.get("code").and_then(|v| v.as_str()).unwrap_or("");
+    let target_url = link.get("target_url").and_then(|v| v.as_str()).unwrap_or("");
+    let title = link.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    let expires_hours = link.get("expires_hours").and_then(|v| v.as_i64()).unwrap_or(0);
+    let link_id = link.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    user_layout("Edit Link", &format!(r#"<div class="card" style="max-width:600px;margin:2rem auto"><h1>✏️ Edit Link</h1><form method="POST" action="/api/links/{}"><label>Target URL</label><input type="text" name="url" value="{}" required/><label>Title</label><input type="text" name="title" value="{}"/><label>Expires in (hours, 0=never)</label><input type="number" name="expires_hours" value="{}" min="0"/><div class="flex mt-2" style="gap:1rem"><button type="submit" class="btn" style="flex:1">Update Link</button><a href="/my-links" class="btn" style="flex:1;background:#7f8aa8">Cancel</a></div></form></div>"#, link_id, html_escape(target_url), html_escape(title), expires_hours))
+}
+
+fn admin_links_html(links: &[serde_json::Value], msg: Option<&str>) -> String {
+    let alert = msg.map(|m| format!(r#"<div class="alert alert--ok">{}</div>"#, m)).unwrap_or_default();
+    let links_html = if links.is_empty() {
+        r#"<div class="card text-center mt-2"><p class="text-muted">No links found.</p></div>"#.to_string()
+    } else {
+        let rows: Vec<String> = links.iter().map(|link| {
+            let code = link.get("code").and_then(|v| v.as_str()).unwrap_or("");
+            let target_url = link.get("target_url").and_then(|v| v.as_str()).unwrap_or("");
+            let title = link.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled");
+            let clicks = link.get("clicks").and_then(|v| v.as_i64()).unwrap_or(0);
+            let owner = link.get("owner_email").and_then(|v| v.as_str()).unwrap_or("Unknown");
+            let created_at = link.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+            let link_id = link.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            format!(r#"<tr><td><a href="https://w9.nu/s/{0}" target="_blank">{0}</a></td><td>{1}</td><td>{2}</td><td>{3}</td><td>{4}</td><td>{5}</td><td><a href="/admin/links/edit/{6}" class="btn btn--sm">Edit</a> <button onclick="adminDeleteLink('{6}')" class="btn btn--sm" style="background:#e74c3c">Delete</button></td></tr>"#, 
+                html_escape(code), html_escape(title), html_escape(target_url), clicks, html_escape(owner), created_at, link_id)
+        }).collect();
+        format!(r#"<div class="card mt-2" style="overflow-x:auto"><table><thead><tr><th>Code</th><th>Title</th><th>Target URL</th><th>Clicks</th><th>Owner</th><th>Created</th><th>Actions</th></tr></thead><tbody>{}</tbody></table></div>"#, rows.join(""))
+    };
+    admin_layout("Admin Links", &format!(r#"<div class="card" style="max-width:1100px;margin:2rem auto"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem"><h1 style="margin:0">👑 Admin - All Links</h1></div>{}{}</div>
+    <script>
+    async function adminDeleteLink(id) {{
+        if (!confirm('Delete this link?')) return;
+        const res = await fetch(`/api/admin/links/${{id}}`, {{ method: 'DELETE' }});
+        if (res.ok) {{ location.reload(); }} else {{ alert('Delete failed'); }}
+    }}
+    </script>"#, alert, links_html))
+}
+
+fn admin_edit_link_html(link: &serde_json::Value) -> String {
+    let code = link.get("code").and_then(|v| v.as_str()).unwrap_or("");
+    let target_url = link.get("target_url").and_then(|v| v.as_str()).unwrap_or("");
+    let title = link.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    let owner = link.get("owner_email").and_then(|v| v.as_str()).unwrap_or("Unknown");
+    let expires_hours = link.get("expires_hours").and_then(|v| v.as_i64()).unwrap_or(0);
+    let link_id = link.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    admin_layout("Admin Edit Link", &format!(r#"<div class="card" style="max-width:600px;margin:2rem auto"><h1>✏️ Admin Edit Link</h1><p class="text-sm text-muted">Owner: {}</p><form method="POST" action="/api/admin/links/{}"><label>Target URL</label><input type="text" name="url" value="{}" required/><label>Title</label><input type="text" name="title" value="{}"/><label>Expires in (hours, 0=never)</label><input type="number" name="expires_hours" value="{}" min="0"/><div class="flex mt-2" style="gap:1rem"><button type="submit" class="btn" style="flex:1">Update Link</button><a href="/admin/links" class="btn" style="flex:1;background:#7f8aa8">Cancel</a></div></form></div>"#, html_escape(owner), link_id, html_escape(target_url), html_escape(title), expires_hours))
+}
+
 // Form structs
 #[derive(Debug, Deserialize)]
 struct QrReq { text: String }
@@ -158,6 +255,12 @@ struct QrReq { text: String }
 struct ConvertReq { text: String, action: String }
 #[derive(Debug, Deserialize)]
 struct NoteReq { title: Option<String>, content: String, password: Option<String>, ttl_hours: Option<i64> }
+#[derive(Debug, Deserialize)]
+struct LinkCreateReq { url: String, code: Option<String>, title: Option<String>, expires_hours: Option<i64> }
+#[derive(Debug, Deserialize)]
+struct LinkUpdateReq { url: String, title: Option<String>, expires_hours: Option<i64> }
+#[derive(Debug, Deserialize)]
+struct LinkIdParam { id: String }
 
 // Handlers
 async fn home() -> Html<String> { Html(home_html()) }
@@ -433,6 +536,283 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
+// Link Management Handlers
+async fn my_links_page(jar: CookieJar, state: State<AppState>) -> impl IntoResponse {
+    let user = match require_auth(&jar, &state).await { 
+        Some(u) => u, 
+        None => return Redirect::to("/login").into_response() 
+    };
+    let email = user.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    
+    let rows = match state.db.query(
+        "SELECT id::text, code, target_url, title, clicks, created_at::text 
+         FROM links WHERE owner_email = $1 ORDER BY created_at DESC",
+        &[&email]
+    ).await {
+        Ok(rows) => rows,
+        Err(e) => return Html(user_layout("Error", &format!(r#"<div class="card"><p>Database error: {}</p></div>"#, html_escape(&e.to_string())))).into_response()
+    };
+    
+    let links: Vec<serde_json::Value> = rows.iter().map(|row| {
+        serde_json::json!({
+            "id": row.get::<_, String>("id"),
+            "code": row.get::<_, String>("code"),
+            "target_url": row.get::<_, String>("target_url"),
+            "title": row.try_get::<_, Option<String>>("title").unwrap_or(None).unwrap_or_default(),
+            "clicks": row.get::<_, i64>("clicks"),
+            "created_at": row.get::<_, String>("created_at")
+        })
+    }).collect();
+    
+    Html(my_links_html(&links, None)).into_response()
+}
+
+async fn create_link(jar: CookieJar, state: State<AppState>, Form(form): Form<LinkCreateReq>) -> impl IntoResponse {
+    let user = match require_auth(&jar, &state).await { 
+        Some(u) => u, 
+        None => return Redirect::to("/login").into_response() 
+    };
+    let email = user.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    
+    // Call w9-links-creator API to create the link
+    let api_url = format!("{}/api/link/create", W9_LINKS_URL);
+    let mut payload = serde_json::json!({
+        "url": form.url,
+    });
+    if let Some(ref code) = form.code {
+        payload["code"] = serde_json::Value::String(code.clone());
+    }
+    if form.expires_hours.unwrap_or(0) > 0 {
+        payload["expires_hours"] = serde_json::Value::Number(serde_json::Number::from(form.expires_hours.unwrap_or(24)));
+    }
+    
+    let client = state.http_client.clone();
+    let api_response = client.post(&api_url)
+        .json(&payload)
+        .send()
+        .await;
+    
+    match api_response {
+        Ok(resp) => {
+            if resp.status().is_success() {
+                let api_json: serde_json::Value = resp.json().await.unwrap_or(serde_json::json!({}));
+                let code = api_json.get("code").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let title = form.title.unwrap_or_default();
+                let expires_hours = form.expires_hours.unwrap_or(0);
+                let target_url = form.url.clone();
+                
+                // Store link ownership in w9-tools database
+                let id = Uuid::new_v4();
+                let expires_at = if expires_hours > 0 {
+                    Some(chrono::Utc::now() + chrono::Duration::hours(expires_hours))
+                } else {
+                    None
+                };
+                
+                let _ = state.db.execute(
+                    "INSERT INTO links (id, code, target_url, owner_email, title, expires_at) VALUES ($1, $2, $3, $4, $5, $6)",
+                    &[&id, &code, &target_url, &email, &title, &expires_at]
+                ).await;
+                
+                (StatusCode::SEE_OTHER, Redirect::to("/my-links")).into_response()
+            } else {
+                Html(my_links_html(&[], Some("❌ Failed to create link via API"))).into_response()
+            }
+        },
+        Err(e) => Html(my_links_html(&[], Some(&format!("❌ API error: {}", html_escape(&e.to_string()))))).into_response()
+    }
+}
+
+async fn edit_link_page(jar: CookieJar, state: State<AppState>, axum::extract::Path(id): axum::extract::Path<String>) -> impl IntoResponse {
+    let user = match require_auth(&jar, &state).await { 
+        Some(u) => u, 
+        None => return Redirect::to("/login").into_response() 
+    };
+    let email = user.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    
+    let row = match state.db.query_opt(
+        "SELECT id::text, code, target_url, title, expires_at FROM links WHERE id::text = $1 AND owner_email = $2",
+        &[&id, &email]
+    ).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return Html(user_layout("Not Found", r#"<div class="card"><p>Link not found</p></div>"#)).into_response(),
+        Err(e) => return Html(user_layout("Error", &format!(r#"<div class="card"><p>Database error: {}</p></div>"#, html_escape(&e.to_string())))).into_response()
+    };
+    
+    let code: String = row.get("code");
+    let target_url: String = row.get("target_url");
+    let title: Option<String> = row.get("title");
+    let expires_at: Option<chrono::DateTime<Utc>> = row.get("expires_at");
+    
+    let expires_hours = expires_at.map(|exp| {
+        let duration = exp - chrono::Utc::now();
+        (duration.num_hours()).max(0)
+    }).unwrap_or(0);
+    
+    let link_json = serde_json::json!({
+        "id": row.get::<_, String>("id"),
+        "code": code,
+        "target_url": target_url,
+        "title": title.unwrap_or_default(),
+        "expires_hours": expires_hours
+    });
+    
+    Html(edit_link_html(&link_json)).into_response()
+}
+
+async fn update_link(jar: CookieJar, state: State<AppState>, axum::extract::Path(id): axum::extract::Path<String>, Form(form): Form<LinkUpdateReq>) -> impl IntoResponse {
+    let user = match require_auth(&jar, &state).await { 
+        Some(u) => u, 
+        None => return Redirect::to("/login").into_response() 
+    };
+    let email = user.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    
+    // Verify ownership
+    let exists = match state.db.query_opt(
+        "SELECT code FROM links WHERE id::text = $1 AND owner_email = $2",
+        &[&id, &email]
+    ).await {
+        Ok(Some(r)) => r.get::<_, String>("code"),
+        Ok(None) => return (StatusCode::NOT_FOUND, "Link not found").into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {}", e)).into_response()
+    };
+    
+    let expires_at = if form.expires_hours.unwrap_or(0) > 0 {
+        Some(chrono::Utc::now() + chrono::Duration::hours(form.expires_hours.unwrap_or(24)))
+    } else {
+        None
+    };
+    
+    match state.db.execute(
+        "UPDATE links SET title = $1, expires_at = $2, target_url = $3 WHERE id::text = $4 AND owner_email = $5",
+        &[&form.title, &expires_at, &form.url, &id, &email]
+    ).await {
+        Ok(_) => (StatusCode::SEE_OTHER, Redirect::to("/my-links")).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Update failed: {}", e)).into_response()
+    }
+}
+
+async fn delete_link(jar: CookieJar, state: State<AppState>, axum::extract::Path(id): axum::extract::Path<String>) -> impl IntoResponse {
+    let user = match require_auth(&jar, &state).await { 
+        Some(u) => u, 
+        None => return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response() 
+    };
+    let email = user.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    
+    match state.db.execute(
+        "DELETE FROM links WHERE id::text = $1 AND owner_email = $2",
+        &[&id, &email]
+    ).await {
+        Ok(1) => (StatusCode::OK, "Deleted").into_response(),
+        Ok(_) => (StatusCode::NOT_FOUND, "Link not found").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Delete failed: {}", e)).into_response()
+    }
+}
+
+// Admin Link Management
+async fn admin_links_page(jar: CookieJar, state: State<AppState>) -> impl IntoResponse {
+    let _user = match require_admin(&jar, &state).await { 
+        Some(u) => u, 
+        None => return Redirect::to("/").into_response() 
+    };
+    
+    let rows = match state.db.query(
+        "SELECT l.id::text, l.code, l.target_url, l.title, l.clicks, l.created_at::text, l.owner_email 
+         FROM links l ORDER BY l.created_at DESC",
+        &[]
+    ).await {
+        Ok(rows) => rows,
+        Err(e) => return Html(admin_layout("Error", &format!(r#"<div class="card"><p>Database error: {}</p></div>"#, html_escape(&e.to_string())))).into_response()
+    };
+    
+    let links: Vec<serde_json::Value> = rows.iter().map(|row| {
+        serde_json::json!({
+            "id": row.get::<_, String>("id"),
+            "code": row.get::<_, String>("code"),
+            "target_url": row.get::<_, String>("target_url"),
+            "title": row.try_get::<_, Option<String>>("title").unwrap_or(None).unwrap_or_default(),
+            "clicks": row.get::<_, i64>("clicks"),
+            "created_at": row.get::<_, String>("created_at"),
+            "owner_email": row.get::<_, String>("owner_email")
+        })
+    }).collect();
+    
+    Html(admin_links_html(&links, None)).into_response()
+}
+
+async fn admin_edit_link_page(jar: CookieJar, state: State<AppState>, axum::extract::Path(id): axum::extract::Path<String>) -> impl IntoResponse {
+    let _user = match require_admin(&jar, &state).await { 
+        Some(u) => u, 
+        None => return Redirect::to("/").into_response() 
+    };
+    
+    let row = match state.db.query_opt(
+        "SELECT id::text, code, target_url, title, owner_email, expires_at FROM links WHERE id::text = $1",
+        &[&id]
+    ).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return Html(admin_layout("Not Found", r#"<div class="card"><p>Link not found</p></div>"#)).into_response(),
+        Err(e) => return Html(admin_layout("Error", &format!(r#"<div class="card"><p>Database error: {}</p></div>"#, html_escape(&e.to_string())))).into_response()
+    };
+    
+    let target_url: String = row.get("target_url");
+    let title: Option<String> = row.get("title");
+    let expires_at: Option<chrono::DateTime<Utc>> = row.get("expires_at");
+    
+    let expires_hours = expires_at.map(|exp| {
+        let duration = exp - chrono::Utc::now();
+        (duration.num_hours()).max(0)
+    }).unwrap_or(0);
+    
+    let link_json = serde_json::json!({
+        "id": row.get::<_, String>("id"),
+        "code": row.get::<_, String>("code"),
+        "target_url": target_url,
+        "title": title.unwrap_or_default(),
+        "owner_email": row.get::<_, String>("owner_email"),
+        "expires_hours": expires_hours
+    });
+    
+    Html(admin_edit_link_html(&link_json)).into_response()
+}
+
+async fn admin_update_link(jar: CookieJar, state: State<AppState>, axum::extract::Path(id): axum::extract::Path<String>, Form(form): Form<LinkUpdateReq>) -> impl IntoResponse {
+    let _user = match require_admin(&jar, &state).await { 
+        Some(u) => u, 
+        None => return (StatusCode::FORBIDDEN, "Admin only").into_response() 
+    };
+    
+    let expires_at = if form.expires_hours.unwrap_or(0) > 0 {
+        Some(chrono::Utc::now() + chrono::Duration::hours(form.expires_hours.unwrap_or(24)))
+    } else {
+        None
+    };
+    
+    match state.db.execute(
+        "UPDATE links SET title = $1, expires_at = $2, target_url = $3 WHERE id::text = $4",
+        &[&form.title, &expires_at, &form.url, &id]
+    ).await {
+        Ok(_) => (StatusCode::SEE_OTHER, Redirect::to("/admin/links")).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Update failed: {}", e)).into_response()
+    }
+}
+
+async fn admin_delete_link(jar: CookieJar, state: State<AppState>, axum::extract::Path(id): axum::extract::Path<String>) -> impl IntoResponse {
+    let _user = match require_admin(&jar, &state).await { 
+        Some(u) => u, 
+        None => return (StatusCode::FORBIDDEN, "Admin only").into_response() 
+    };
+    
+    match state.db.execute(
+        "DELETE FROM links WHERE id::text = $1",
+        &[&id]
+    ).await {
+        Ok(1) => (StatusCode::OK, "Deleted").into_response(),
+        Ok(_) => (StatusCode::NOT_FOUND, "Link not found").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Delete failed: {}", e)).into_response()
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry().with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())).with(tracing_subscriber::fmt::layer()).init();
@@ -463,6 +843,40 @@ async fn main() -> anyhow::Result<()> {
         &[]
     ).await;
 
+    // Create notes table if not exists (for notepads)
+    let _ = client.execute(
+        "CREATE TABLE IF NOT EXISTS notes (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            code VARCHAR(20) NOT NULL UNIQUE,
+            content TEXT NOT NULL,
+            password_hash VARCHAR(255),
+            title VARCHAR(255),
+            expires_at TIMESTAMPTZ NOT NULL,
+            views INT NOT NULL DEFAULT 0,
+            max_views INT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )",
+        &[]
+    ).await;
+
+    // Create links table if not exists (for link ownership tracking)
+    let _ = client.execute(
+        "CREATE TABLE IF NOT EXISTS links (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            code VARCHAR(20) NOT NULL UNIQUE,
+            target_url TEXT NOT NULL DEFAULT '',
+            owner_email TEXT NOT NULL,
+            title VARCHAR(255),
+            clicks BIGINT NOT NULL DEFAULT 0,
+            expires_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_links_owner ON links(owner_email);
+        CREATE INDEX IF NOT EXISTS idx_links_code ON links(code);",
+        &[]
+    ).await;
+    tracing::info!("Database tables initialized: uploads, notes, links");
+
     let state = AppState { db: Arc::new(client), http_client: reqwest::Client::builder().timeout(std::time::Duration::from_secs(10)).build()? };
 
     let router = Router::new()
@@ -475,6 +889,16 @@ async fn main() -> anyhow::Result<()> {
         .route("/n/:code/unlock", axum::routing::post(unlock_notepad))
         .route("/upload", get(upload_page)).route("/upload", axum::routing::post(upload_post))
         .route("/file-convert", get(file_convert_page)).route("/file-convert", axum::routing::post(file_convert_post))
+        // Link management routes
+        .route("/my-links", get(my_links_page))
+        .route("/my-links/edit/:id", get(edit_link_page))
+        .route("/api/links", axum::routing::post(create_link))
+        .route("/api/links/:id", axum::routing::post(update_link).delete(delete_link))
+        // Admin routes
+        .route("/admin/links", get(admin_links_page))
+        .route("/admin/links/edit/:id", get(admin_edit_link_page))
+        .route("/api/admin/links/:id", axum::routing::post(admin_update_link).delete(admin_delete_link))
+        // Health check
         .route("/api/health", get(health_check))
         .nest_service("/w9-logo", ServeDir::new("public/w9-logo"))
         .nest_service("/uploads", ServeDir::new(UPLOADS_DIR))
