@@ -192,7 +192,7 @@ function Header() {
       {!isHomepage && (
         <div className="brand">
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <img src="/w9-logo/wordmark-dark.svg" alt="W9 Labs" className="brand-logo" />
+            <img src="/w9-logo/wordmark.svg" alt="W9 Labs" className="brand-logo" />
             <div>
               <p className="eyebrow">Developed by W9 Labs</p>
               <h1>W9 Tools</h1>
