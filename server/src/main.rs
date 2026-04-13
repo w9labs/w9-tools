@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio_postgres::{Client, NoTls};
 use tower::ServiceBuilder;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{cors::CorsLayer, trace::TraceLayer, services::ServeDir};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
@@ -200,6 +200,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/notepad", get(notepad_page)).route("/notepad", axum::routing::post(notepad_post))
         .route("/file-convert", get(file_convert_page))
         .route("/api/health", get(health_check))
+        .nest_service("/w9-logo", ServeDir::new("public/w9-logo"))
         .with_state(state)
         .layer(ServiceBuilder::new().layer(TraceLayer::new_for_http()).layer(CorsLayer::permissive()));
     let addr = format!("0.0.0.0:{}", port);
