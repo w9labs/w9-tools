@@ -57,7 +57,22 @@ body {
 .brand img.brand-logo {
   height: 36px;
   width: auto;
-  image-rendering: pixelated;
+  image-rendering: auto;
+}
+
+@media (max-width: 600px) {
+  .brand img.brand-logo {
+    height: 28px;
+  }
+  .brand {
+    flex-direction: column;
+    gap: 0.75rem;
+    text-align: center;
+  }
+  .brand > div:first-child {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
 }
 
 .brand span {
