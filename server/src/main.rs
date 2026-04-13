@@ -29,7 +29,7 @@ pub struct AppState {
 
 // Layout helpers
 fn layout(title: &str, body: &str, nav: &str) -> String {
-    format!(r#"<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>{title} — W9 Tools</title><style>{CSS}</style></head><body><div class="app"><nav class="nav"><a href="/" class="brand">🔧 W9 Tools</a>{nav}</nav>{body}<footer class="footer"><p>W9 Tools — QR · Converter · Notepad · File Convert</p></footer></div></body></html>"#, title=title, CSS=CSS, nav=nav, body=body)
+    format!(r#"<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>{title} — W9 Tools</title><style>{CSS}</style></head><body><div class="app"><nav class="nav"><div class="nav-inner"><a href="/" class="brand"><img src="/w9-logo/workmark-transparent.svg" alt="W9 Labs"/><span class="brand-text">Tools</span></a><div class="nav-links">{nav}</div></div></nav>{body}<footer class="footer"><img class="footer-logo" src="/w9-logo/workmark-transparent.svg" alt="W9 Labs"/><p>W9 Tools — QR · Converter · Notepad · File Convert</p></footer></div></body></html>"#, title=title, CSS=CSS, nav=nav, body=body)
 }
 fn public_layout(title: &str, body: &str) -> String { layout(title, body, r#"<a href="/login">Login</a>"#) }
 fn user_layout(title: &str, body: &str) -> String { layout(title, body, r#"<a href="/qr">QR</a><a href="/convert">Convert</a><a href="/notepad">Notepad</a><a href="/file-convert">File Convert</a><a href="/logout">Logout</a>"#) }
@@ -55,7 +55,7 @@ async fn require_auth(jar: &CookieJar, state: &AppState) -> Option<serde_json::V
 
 // Pages
 fn home_html() -> String {
-    public_layout("W9 Tools", r#"<div class="hero"><h1>🔧 W9 Tools</h1><p>Daily utilities for developers and teams</p><div class="flex mt-3" style="justify-content:center"><a href="/login" class="btn">Login with W9</a></div></div><div class="grid mt-3"><div class="card"><h3>📱 QR Code Generator</h3><p class="text-sm">Generate QR codes for URLs and text.</p></div><div class="card"><h3>🔄 Text Converter</h3><p class="text-sm">Base64, URL-encode, case conversion and more.</p></div><div class="card"><h3>📝 Quick Notepad</h3><p class="text-sm">Create temporary notes with password protection.</p></div><div class="card"><h3>📄 File Converter</h3><p class="text-sm">Convert between common file formats (images, text, documents).</p></div></div>"#)
+    public_layout("W9 Tools", r#"<div class="hero"><img class="hero-logo" src="/w9-logo/logo-landscape-transparent.svg" alt="W9 Labs"/><h1>🔧 W9 Tools</h1><p>Daily utilities for developers and teams</p><div class="flex mt-3" style="justify-content:center"><a href="/login" class="btn">Login with W9</a></div></div><div class="grid mt-3"><div class="card"><h3>📱 QR Code Generator</h3><p class="text-sm">Generate QR codes for URLs and text.</p></div><div class="card"><h3>🔄 Text Converter</h3><p class="text-sm">Base64, URL-encode, case conversion and more.</p></div><div class="card"><h3>📝 Quick Notepad</h3><p class="text-sm">Create temporary notes with password protection.</p></div><div class="card"><h3>📄 File Converter</h3><p class="text-sm">Convert between common file formats (images, text, documents).</p></div></div>"#)
 }
 
 fn login_html() -> String {
