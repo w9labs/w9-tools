@@ -1,49 +1,116 @@
 /* W9 Labs — Shared 8-Bit Voxel Arcade UI */
+/* Design: Retro arcade meets modern reliability. Sharp edges, bold colors, pixel fonts. */
+/* Last updated: 2026-04-13 — Logo integration + table/card border fixes + responsive */
+
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;border-radius:0!important}
-html{font-size:16px}
-body{font-family:'VT323','Press Start 2P',monospace;background:#160c13;color:#fff;line-height:1.6}
+html{font-size:16px;scroll-behavior:smooth}
+body{font-family:'VT323','Press Start 2P',monospace;background:#160c13;color:#fff;line-height:1.6;-webkit-font-smoothing:none;overflow-x:hidden}
 a{color:#fce126;text-decoration:none}a:hover{color:#fff;text-shadow:0 0 8px #fce126}
-.app{max-width:900px;margin:0 auto;padding:1rem}
-.nav{background:#32305a;border-bottom:4px solid #000;padding:1rem;display:flex;gap:1.5rem;flex-wrap:wrap;justify-content:center}
-.nav a{font-family:'Press Start 2P',monospace;font-size:.55rem;color:#fff;padding:.5rem;border:2px solid transparent}
+
+/* ========== APP SHELL ========== */
+.app{max-width:900px;margin:0 auto;padding:1rem;width:100%}
+.app-main{min-height:60vh}
+
+/* ========== NAVIGATION ========== */
+.nav{background:#32305a;border-bottom:4px solid #000;padding:.6rem 1rem;position:sticky;top:0;z-index:100;box-shadow:0 4px 0 #000}
+.nav-inner{max-width:900px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+.nav .brand{display:flex;align-items:center;gap:.6rem;font-family:'Press Start 2P',monospace;font-size:.7rem;color:#fce126;border:none!important}
+.nav .brand img{height:28px;width:auto;image-rendering:pixelated;transition:transform .2s ease,opacity .2s ease}
+.nav .brand:hover img{transform:scale(1.05);opacity:.9}
+.nav .brand-text{color:#fff;font-size:.55rem;opacity:.8;border-left:2px solid rgba(252,225,38,.4);padding-left:.6rem}
+.nav-links{display:flex;gap:.3rem;flex-wrap:wrap;align-items:center}
+.nav a{font-family:'Press Start 2P',monospace;font-size:.5rem;color:#fff;padding:.4rem .6rem;border:2px solid transparent;transition:border-color .15s ease,color .15s ease,transform .1s ease}
 .nav a:hover,.nav a.active{border-color:#fce126;color:#fce126}
-.nav .brand{font-family:'Press Start 2P',monospace;font-size:.8rem;color:#fce126}
-h1{font-family:'Press Start 2P',monospace;font-size:1.4rem;color:#fce126;text-shadow:4px 4px 0 #000;margin:2rem 0 1rem;text-align:center}
+
+/* ========== TYPOGRAPHY ========== */
+h1{font-family:'Press Start 2P',monospace;font-size:1.4rem;color:#fce126;text-shadow:4px 4px 0 #000;margin:2rem 0 1rem;text-align:center;word-wrap:break-word}
 h2{font-family:'Press Start 2P',monospace;font-size:1rem;color:#fce126;border-bottom:2px solid #7f8aa8;padding-bottom:.5rem;margin:1.5rem 0 1rem}
 h3{font-family:'Press Start 2P',monospace;font-size:.75rem;color:#fce126;margin:.8rem 0}
-.card{background:#160c13;border:4px solid #000;box-shadow:5px 5px 0 #000;padding:1.5rem;margin:1rem 0}
+
+/* ========== HERO SECTION ========== */
+.hero{text-align:center;padding:2rem;background:#32305a;border:4px solid #000;box-shadow:5px 5px 0 #000;margin:1.5rem 0;overflow:visible}
+.hero h1{margin-top:0;text-shadow:6px 6px 0 #000;font-size:2rem}
+.hero p{font-size:1.2rem;margin:1rem 0}
+.hero-sub{color:#987b9e;font-size:1rem}
+.hero-muted{color:#7f8aa8;font-size:.9rem}
+.hero-actions{margin-top:1.5rem;display:flex;gap:.5rem;justify-content:center;flex-wrap:wrap}
+.hero-logo{max-width:100%;height:auto;display:block;margin:0 auto 1.5rem;image-rendering:pixelated;animation:heroGlow 3s ease-in-out infinite alternate;transition:transform .3s ease}
+.hero:hover .hero-logo{transform:scale(1.02)}
+@keyframes heroGlow{0%{filter:drop-shadow(0 0 0 transparent)}100%{filter:drop-shadow(0 0 12px rgba(252,225,38,.3))}}
+
+/* ========== CARDS ========== */
+.card{background:#160c13;border:4px solid #000;box-shadow:5px 5px 0 #000;padding:1.5rem;margin:1rem 0;transition:box-shadow .15s ease,transform .15s ease;overflow:visible}
 .card:hover{box-shadow:3px 3px 0 #000;transform:translate(2px,2px)}
-.btn{font-family:'Press Start 2P',monospace;font-size:.7rem;background:#fce126;color:#000;border:4px solid #000;box-shadow:4px 4px 0 #000;padding:.8rem 1.2rem;cursor:pointer;text-transform:uppercase;display:inline-block;margin:.3rem}
+
+/* ========== BUTTONS ========== */
+.btn{font-family:'Press Start 2P',monospace;font-size:.7rem;background:#fce126;color:#000;border:4px solid #000;box-shadow:4px 4px 0 #000;padding:.8rem 1.2rem;cursor:pointer;text-transform:uppercase;display:inline-block;margin:.3rem;transition:box-shadow .1s ease,transform .1s ease}
 .btn:hover{box-shadow:0 0 0 #000;transform:translate(4px,4px)}
+.btn:active{box-shadow:0 0 0 #000;transform:translate(4px,4px)}
 .btn--sm{font-size:.55rem;padding:.5rem .8rem}
 .btn--ghost{background:#32305a;color:#fce126}
-input,textarea,select{font-family:'VT323',monospace;font-size:1.1rem;background:#160c13;color:#fff;border:3px solid #7f8aa8;padding:.6rem .8rem;width:100%;margin:.3rem 0}
+.btn--ghost:hover{background:#3e3b6e;color:#fff}
+
+/* ========== FORMS ========== */
+input,textarea,select{font-family:'VT323',monospace;font-size:1.1rem;background:#160c13;color:#fff;border:3px solid #7f8aa8;padding:.6rem .8rem;width:100%;margin:.3rem 0;transition:border-color .15s ease}
 input:focus,textarea:focus,select:focus{border-color:#fce126;outline:none}
 label{font-family:'Press Start 2P',monospace;font-size:.6rem;color:#987b9e;display:block;margin-top:.8rem}
-.form-row{display:flex;gap:1rem;align-items:flex-end}
-.form-row>*{flex:1}
-table{width:100%;border-collapse:collapse;margin:1rem 0}
-th{font-family:'Press Start 2P',monospace;font-size:.6rem;color:#fce126;background:#32305a;padding:.6rem;text-align:left;border:2px solid #000}
-td{padding:.5rem .6rem;border:2px solid #7f8aa8;font-size:1rem}
+.form-row{display:flex;gap:1rem;align-items:flex-end;flex-wrap:wrap}
+.form-row>*{flex:1;min-width:0}
+
+/* ========== TABLES — Fixed borders & overflow ========== */
+table{width:100%;border-collapse:collapse;margin:1rem 0;table-layout:auto}
+th{font-family:'Press Start 2P',monospace;font-size:.55rem;color:#fce126;background:#32305a;padding:.5rem .6rem;text-align:left;border:2px solid #000;white-space:nowrap}
+td{padding:.5rem .6rem;border:2px solid #7f8aa8;font-size:1rem;word-wrap:break-word;overflow-wrap:break-word}
 tr:hover td{background:rgba(252,225,38,.05)}
-.alert{padding:1rem;border:3px solid;margin:1rem 0;font-size:1.1rem}
+
+/* ========== ALERTS & BADGES ========== */
+.alert{padding:1rem;border:3px solid;margin:1rem 0;font-size:1.1rem;word-wrap:break-word}
 .alert--ok{border-color:#0a8c88;color:#0a8c88}
 .alert--err{border-color:#e06b81;color:#e06b81}
 .badge{font-family:'Press Start 2P',monospace;font-size:.5rem;padding:.2rem .5rem;display:inline-block}
 .badge--ok{background:#0a8c88;color:#fff}
 .badge--err{background:#e06b81;color:#fff}
 .badge--warn{background:#fce126;color:#000}
-.footer{margin-top:3rem;padding:1.5rem;border-top:2px solid #7f8aa8;text-align:center;font-size:.9rem;color:#7f8aa8}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem}
-.hero{text-align:center;padding:2rem;background:#32305a;border:4px solid #000;box-shadow:5px 5px 0 #000;margin:1.5rem 0}
-.hero h1{margin-top:0;text-shadow:6px 6px 0 #000;font-size:2rem}
-.hero p{font-size:1.2rem;margin:1rem 0}
+
+/* ========== CODE BLOCKS ========== */
 .code{background:#0a0a0a;border:2px solid #7f8aa8;padding:.8rem;font-family:monospace;font-size:.9rem;overflow-x:auto;margin:.5rem 0;white-space:pre-wrap;word-break:break-all}
+
+/* ========== FOOTER ========== */
+.footer{margin-top:3rem;padding:1.5rem;border-top:2px solid #7f8aa8;text-align:center;font-size:.9rem;color:#7f8aa8;display:flex;flex-direction:column;align-items:center;gap:.5rem}
+.footer-logo{height:24px;width:auto;image-rendering:pixelated;opacity:.7;transition:opacity .2s ease}
+.footer-logo:hover{opacity:1}
+
+/* ========== GRID ========== */
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem}
+
+/* ========== LAYOUT HELPERS ========== */
 .flex{display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
 .flex-between{justify-content:space-between}
 .mt-1{margin-top:.5rem}.mt-2{margin-top:1rem}.mt-3{margin-top:1.5rem}.mb-1{margin-bottom:.5rem}.mb-2{margin-bottom:1rem}
-.text-sm{font-size:.9rem}.text-xs{font-size:.8rem}
-.text-muted{color:#7f8aa8}
-.text-center{text-align:center}
-.hidden{display:none}
-@media(max-width:600px){.form-row{flex-direction:column}.grid{grid-template-columns:1fr}.nav{gap:.5rem}}
+.text-sm{font-size:.9rem}.text-xs{font-size:.75rem}
+.text-muted{color:#7f8aa8}.text-center{text-align:center}.hidden{display:none}
+
+/* ========== RESPONSIVE ========== */
+@media(max-width:600px){
+  .form-row{flex-direction:column}
+  .grid{grid-template-columns:1fr}
+  .nav{gap:.3rem}
+  .nav-inner{flex-direction:column;align-items:center}
+  .hero{padding:1.5rem 1rem}
+  .hero h1{font-size:1.4rem}
+  .hero-logo{max-width:90vw}
+  h1{font-size:1.1rem}
+  .btn{font-size:.6rem;padding:.6rem 1rem}
+  .nav .brand{font-size:.6rem}
+  .nav .brand img{height:22px}
+  table{font-size:.85rem}
+  th{font-size:.5rem}
+  td{padding:.4rem}
+}
+
+/* ========== ENTRANCE ANIMATIONS ========== */
+.hero,.card,.footer{animation:fadeUp .4s ease both}
+.card:nth-child(2){animation-delay:.05s}
+.card:nth-child(3){animation-delay:.1s}
+.card:nth-child(4){animation-delay:.15s}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
